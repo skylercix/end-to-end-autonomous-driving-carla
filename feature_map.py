@@ -9,7 +9,7 @@ import random
 
 
 MODEL_PATH = "model.pth"
-DATASET_DIR = "dataset_manual"
+DATASET_DIR = "dataset_processed"
 DEVICE = "cpu"  
 
 # --- MODELUL
@@ -17,7 +17,7 @@ class SmallNvidiaModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(3, 24, 5, stride=2), nn.ReLU(), # Layer 0 (Conv1)
+            nn.Conv2d(3, 24, 5, stride=2), nn.ReLU(), #layer 0
             nn.Conv2d(24, 36, 5, stride=2), nn.ReLU(),
             nn.Conv2d(36, 48, 5, stride=2), nn.ReLU(),
             nn.Conv2d(48, 64, 3), nn.ReLU(),
@@ -40,13 +40,13 @@ def convert_yuv(img):
     return img.convert("YCbCr")
 
 transform = transforms.Compose([
-    transforms.Lambda(crop_img),        # 1. CROP
-    transforms.Lambda(convert_yuv),     # 2. YUV
-    transforms.Resize((66, 200)),       # 3. Resize
-    transforms.ToTensor(),              # 4. Tensor
+    transforms.Lambda(crop_img),        
+    transforms.Lambda(convert_yuv),     
+    transforms.Resize((66, 200)),       
+    transforms.ToTensor(),              
 ])
 
-# --- 4. EXTRAGERE ACTIVARI (Hook) ---
+#activari
 activation = {}
 def get_activation(name):
     def hook(model, input, output):
@@ -54,7 +54,7 @@ def get_activation(name):
     return hook
 
 def main():
-    # Verificari initiale
+    
     if not os.path.exists(MODEL_PATH):
         print(f" Eroare: nu exista {MODEL_PATH}")
         return
@@ -62,7 +62,7 @@ def main():
         print(f"Eroare: nu exista {DATASET_DIR}")
         return
 
-    # Incarcare Model
+    
     print("Se incarca modelul...")
     model = SmallNvidiaModel().to(DEVICE)
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
@@ -83,10 +83,10 @@ def main():
     image_path = random.choice(all_images)
     print(f"Analizam imaginea: {image_path}")
 
-    # --- Procesare Imagine ---
+    
     raw_image = Image.open(image_path).convert("RGB")
     
-    # Aplicam transformarile
+    
     input_tensor = transform(raw_image).unsqueeze(0).to(DEVICE)
 
     
@@ -94,10 +94,10 @@ def main():
     layer_to_visualize = model.net[0] 
     layer_to_visualize.register_forward_hook(get_activation('conv1'))
 
-    # Forward pass
+    
     _ = model(input_tensor)
 
-    # Extragem datele
+    
     act = activation['conv1'].squeeze()
     num_filters = act.shape[0] 
     
@@ -106,22 +106,21 @@ def main():
     
     fig = plt.figure(figsize=(15, 8))
     
-    # 1. Afisam imaginea originala (prelucrata)
-    # Convertim tensorul (C, H, W) -> (H, W, C) pentru matplotlib
+    
     input_img_display = input_tensor.squeeze().permute(1, 2, 0).cpu().numpy()
     
     plt.subplot(5, 6, 1)
     plt.imshow(input_img_display)
-    plt.title("Input (YUV)\n(Culorile par false)", fontsize=10)
+    plt.title("Input (YUV)", fontsize=10)
     plt.axis('off')
 
-    # 2. Afisam cele 24 de Feature Maps
+    
     for i in range(num_filters):
-        # Calculam pozitia in grid (incepem de la 2, pt ca 1 e imaginea originala)
-        ax = plt.subplot(5, 6, i + 2) # Ajustat grid-ul ca sa incapem
+        
+        ax = plt.subplot(5, 6, i + 2) 
         feature_map = act[i].cpu().numpy()
         
-        ax.imshow(feature_map, cmap='viridis') # 'viridis', 'plasma', 'gray'
+        ax.imshow(feature_map, cmap='viridis') 
         ax.axis('off')
         ax.set_title(f'Filtru {i}', fontsize=8)
 

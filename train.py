@@ -9,16 +9,15 @@ from torchvision import transforms
 import torchvision.transforms.functional as TF
 
 
-
-DATASET_DIR = "dataset_manual"
+DATASET_DIR = "dataset_processed"
 MODEL_SAVE_PATH = "model.pth"
 
-BATCH_SIZE = 64         
-NUM_EPOCHS = 50         
+BATCH_SIZE = 64 
+NUM_EPOCHS = 35
 LEARNING_RATE = 1e-4    
 
-NUM_WORKERS = 4         
-PREFETCH_FACTOR = 2     
+NUM_WORKERS = 4       
+PREFETCH_FACTOR = 2
 
 
 if torch.cuda.is_available():
@@ -31,9 +30,10 @@ else:
     PERSISTENT_WORKERS = False
 
 # ==========================================
-# FUNCȚII TRANSFORMARE
+#  TRANSFORMARI
 # ==========================================
 def crop_img(img):
+    # crop (top 80px) 
     return img.crop((0, 80, 320, 240))
 
 def convert_yuv(img):
@@ -48,9 +48,8 @@ class CarlaDataset(Dataset):
         self.steering = []
 
         if not os.path.exists(root):
-             raise FileNotFoundError(f"Folderul {root} nu exista!")
+             raise FileNotFoundError(f"Folderul {root} nu exista! Ai rulat process_data.py?")
 
-       
         print(f"Se scaneaza dataset-ul in: {root} ...")
         
         for episode_folder in os.listdir(root):
@@ -105,6 +104,8 @@ class CarlaDataset(Dataset):
 
         steer = self.steering[idx]
 
+        # Augmentare: Flip Orizontal 50% 
+        
         if random.random() > 0.5:
             img = TF.hflip(img)
             steer = -steer
@@ -138,14 +139,13 @@ class SmallNvidiaModel(nn.Module):
 #  TRAIN LOOP
 # ==========================================
 def train():
-  
     print(f"\n--- INCEPERE ANTRENARE ---")
     if DEVICE == "cuda":
         print(f" GPU Activat: {torch.cuda.get_device_name(0)}")
     else:
         print(" Se foloseste CPU.")
         
-    print(f"Batch Size: {BATCH_SIZE} | Workers: {NUM_WORKERS}")
+    print(f"Batch Size: {BATCH_SIZE} | Dataset: {DATASET_DIR}")
 
     dataset = CarlaDataset(DATASET_DIR)
     
