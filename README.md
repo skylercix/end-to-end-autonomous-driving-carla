@@ -45,20 +45,22 @@ The environment should contain at least:
 - `pygame`, `keyboard`
 - `matplotlib`
 
-### 1.3. `requirements.txt` and versions
+### 1.3. Exact versions (`requirements.txt`, Python, CARLA)
 
-The Conda environment for this project also uses `requirements.txt` in this folder. The key packages and versions you are using are:
+This project is configured and tested with the following versions:
 
+- **Python**: `3.8.20`
+- **CARLA**: `0.9.12` (server and Python API)
 - **`future`**: version not pinned (any compatible version).
 - **`numpy`**:
   - `numpy==1.18.4` for Python 3 (`python_version >= '3.0'`).
-  - Generic `numpy` entry for Python 2 (not relevant for your setup, since you use Python 3).
+  - Generic `numpy` entry for Python 2 (not relevant here, the code runs on Python 3.8.20).
 - **`pygame`**: version not pinned (use a recent version compatible with your OS/Python).
 - **`matplotlib`**: version not pinned.
 - **`open3d`**: version not pinned.
 - **`Pillow`**: version not pinned.
 
-For reproducibility in your thesis, you can mention explicitly that your experiments use **Python 3 + `numpy==1.18.4`** together with the CARLA version corresponding to your simulator installation.
+All experiments in this guide assume the environment above.
 
 ---
 
