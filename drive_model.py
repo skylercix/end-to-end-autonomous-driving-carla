@@ -14,7 +14,6 @@ import torch
 import torch.nn as nn
 from torchvision import transforms
 
-
 try:
     sys.path.append(glob.glob('../carla')[0])
 except IndexError:
@@ -24,7 +23,7 @@ from agents.navigation.basic_agent import BasicAgent
 from agents.navigation.local_planner import RoadOption
 
 
-MODEL_PATH = "model_nav.pth"
+MODEL_PATH = "model_nav_traffic.pth" 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 STEERING_HISTORY_SIZE = 2 
 
@@ -33,7 +32,6 @@ def map_command(road_option):
     elif road_option == RoadOption.RIGHT: return 2
     elif road_option == RoadOption.STRAIGHT: return 3
     else: return 0 
-
 
 def cleanup_actors(world):
     actors = world.get_actors()
@@ -46,6 +44,28 @@ def cleanup_actors(world):
     for actor in actors.filter('vehicle.*'):
         actor.destroy()
     time.sleep(0.5)
+
+
+def spawn_traffic(world, client, num_vehicles=30):
+    blueprint_library = world.get_blueprint_library()
+    spawn_points = world.get_map().get_spawn_points()
+    
+    traffic_manager = client.get_trafficmanager(8000)
+    traffic_manager.set_global_distance_to_leading_vehicle(2.0)
+    
+    spawned_vehicles = []
+    random.shuffle(spawn_points)
+    
+    for i in range(min(num_vehicles, len(spawn_points))):
+        bp = random.choice(blueprint_library.filter('vehicle.*'))
+        if int(bp.get_attribute('number_of_wheels')) == 4:
+            npc = world.try_spawn_actor(bp, spawn_points[i])
+            if npc is not None:
+                npc.set_autopilot(True)
+                spawned_vehicles.append(npc)
+                
+    print(f"[TRAFIC] {len(spawned_vehicles)} vehicule npc.")
+    return spawned_vehicles
 
 
 class ConditionalNvidiaModel(nn.Module):
@@ -61,10 +81,12 @@ class ConditionalNvidiaModel(nn.Module):
         )
         self.command_fc = nn.Sequential(nn.Linear(1, 16), nn.ReLU())
         self.joint_fc = nn.Sequential(
-            nn.Linear(1152 + 16, 100), nn.ReLU(),
-            nn.Linear(100, 50), nn.ReLU(),
-            nn.Linear(50, 10), nn.ReLU(),
-            nn.Linear(10, 1)
+            nn.Linear(1152 + 16, 256), nn.ReLU(),
+            nn.Dropout(p=0.3), 
+            nn.Linear(256, 128), nn.ReLU(),
+            nn.Dropout(p=0.2), 
+            nn.Linear(128, 64), nn.ReLU(),
+            nn.Linear(64, 3) 
         )
 
     def forward(self, img, cmd):
@@ -73,7 +95,6 @@ class ConditionalNvidiaModel(nn.Module):
         cmd_feats = self.command_fc(cmd)
         combined = torch.cat((img_feats, cmd_feats), dim=1)
         return self.joint_fc(combined)
-
 
 def crop_img(img):
     return img.crop((0, 80, 320, 240))
@@ -99,10 +120,10 @@ def image_to_tensor(image):
 def main():
     pygame.init()
     display = pygame.display.set_mode((450, 400))
-    pygame.display.set_caption("AI Driving | Radar GPS Identic Colectare")
+    pygame.display.set_caption("AI Driving | Trafic Inclus")
     font = pygame.font.SysFont("Arial", 18)
 
-    print("Se conectează la simulator...")
+    print("Se conecteaza la simulator...")
     client = carla.Client("localhost", 2000)
     client.set_timeout(30.0) 
     world = client.get_world()
@@ -112,7 +133,6 @@ def main():
         world = client.load_world('Town01')
         time.sleep(2.0)
 
-  
     model = ConditionalNvidiaModel().to(DEVICE)
     if os.path.exists(MODEL_PATH):
         try:
@@ -120,10 +140,10 @@ def main():
             model.eval()
             print(f"\n[AI] Model {MODEL_PATH} încărcat pe {DEVICE}!")
         except Exception as e:
-            print(f"\n[EROARE] Eroare la încărcare: {e}")
+            print(f"\n[EROARE] Eroare la incarcare: {e}")
             return
     else:
-        print(f"\n[EROARE] Nu am găsit fișierul {MODEL_PATH}!")
+        print(f"\n[EROARE] Nu am gasit fisierul {MODEL_PATH}!")
         return
 
     cleanup_actors(world)
@@ -131,6 +151,10 @@ def main():
     spawn_points = world.get_map().get_spawn_points()
     spectator = world.get_spectator()
     clock = pygame.time.Clock()
+
+ 
+    spawn_traffic(world, client, num_vehicles=30)
+    time.sleep(1.0)
 
     vehicle = None
     camera = None
@@ -163,7 +187,6 @@ def main():
                 respawn_requested = True
                 time.sleep(0.2) 
 
-           
             if respawn_requested or vehicle is None or not vehicle.is_alive:
                 
                 if camera is not None:
@@ -188,7 +211,6 @@ def main():
                     if vehicle is not None:
                         spawn_success = True
 
-                
                 agent = BasicAgent(vehicle, target_speed=20)
                 agent.ignore_traffic_lights(active=True)
                 agent.ignore_stop_signs(active=True)
@@ -200,7 +222,6 @@ def main():
                 else: 
                     agent.set_destination(random.choice(spawn_points).location)
 
-                
                 cam_bp = blueprint_library.find("sensor.camera.rgb")
                 cam_bp.set_attribute("image_size_x", "320")
                 cam_bp.set_attribute("image_size_y", "240")
@@ -212,10 +233,9 @@ def main():
 
                 respawn_requested = False
                 steering_history = [0.0] * STEERING_HISTORY_SIZE
-                print(f"[CARLA] Vehicul respawnat. Traseu complet nou!")
+                print(f"[CARLA] Vehicul respawnat.")
                 continue
 
-          
             if agent.done():
                 current_loc = vehicle.get_location()
                 new_dest = random.choice(spawn_points)
@@ -227,8 +247,8 @@ def main():
             current_road_option = agent.get_local_planner().target_road_option
             current_command = map_command(current_road_option)
 
-            
-            control_to_apply = carla.VehicleControl(throttle=0.4) 
+           
+            control_to_apply = carla.VehicleControl() 
             
             try:
                 last_image = None
@@ -240,13 +260,42 @@ def main():
                     cmd_t = torch.tensor([current_command], dtype=torch.float32).to(DEVICE)
 
                     with torch.no_grad():
-                        raw_steer = float(model(img_t, cmd_t)[0])
+                       
+                        predictions = model(img_t, cmd_t)[0]
+                        raw_steer = float(predictions[0])
+                        raw_throttle = float(predictions[1])
+                        raw_brake = float(predictions[2])
 
+                   
                     steering_history.pop(0)
                     steering_history.append(raw_steer)
                     avg_steer = sum(steering_history) / len(steering_history)
-                    
                     control_to_apply.steer = avg_steer
+                    
+                    
+                    vel = vehicle.get_velocity()
+                    current_speed = 3.6 * math.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
+                    
+                    
+                    if raw_brake > 0.2:
+                        control_to_apply.brake = max(0.4, min(1.0, raw_brake * 2.0))
+                        control_to_apply.throttle = 0.0
+                    else:
+                        control_to_apply.brake = 0.0
+                        
+                        
+                        target_speed = raw_throttle * 40.0 
+                        
+                        
+                        speed_error = target_speed - current_speed
+                        
+                        if speed_error > 0:
+                           
+                            calc_throttle = speed_error * 0.15
+                            control_to_apply.throttle = max(0.25, min(0.75, calc_throttle)) 
+                        else:
+                            control_to_apply.throttle = 0.0
+
                     vehicle.apply_control(control_to_apply)
             except queue.Empty: 
                 pass
@@ -256,8 +305,9 @@ def main():
             
             cmd_str = ["LANE", "LEFT", "RIGHT", "STRAIGHT"][current_command]
             
-            text_1 = font.render(f"Driver: AI AUTOPILOT | Model: {MODEL_PATH}", True, (255,255,255))
-            text_2 = font.render(f"GPS CMD: {cmd_str} | Steer: {control_to_apply.steer:.2f}", True, (255,255,255))
+           
+            text_1 = font.render(f"Driver: AI | Model: {MODEL_PATH}", True, (255,255,255))
+            text_2 = font.render(f"GPS: {cmd_str} | Steer: {control_to_apply.steer:.2f} | T: {control_to_apply.throttle:.2f} | B: {control_to_apply.brake:.2f}", True, (255,255,255))
             text_3 = font.render(f"[V] Camera | [R] Respawn | [ESC] Exit", True, (150,150,150))
             text_4 = font.render(f"RADAR GPS (2D) \/", True, (255, 255, 0))
             
@@ -276,7 +326,6 @@ def main():
                 
                 radar_center_x, radar_center_y = 225, 350
                 pygame.draw.circle(display, (0, 150, 255), (radar_center_x, radar_center_y), 6)
-
                 
                 for wp, _ in route_trace:
                     w_x = wp.transform.location.x
@@ -285,12 +334,10 @@ def main():
                     dx = w_x - v_x
                     dy = w_y - v_y
                     
-                    
                     dist = math.sqrt(dx**2 + dy**2)
                     
                     rel_x = dx * math.cos(v_yaw) + dy * math.sin(v_yaw)
                     rel_y = -dx * math.sin(v_yaw) + dy * math.cos(v_yaw)
-                    
                     
                     if dist < 40.0 and rel_x > -2.0:
                         scale = 4  
@@ -302,7 +349,6 @@ def main():
 
             pygame.display.flip()
 
-          
             if follow_mode and vehicle.is_alive:
                 t = vehicle.get_transform()
                 spectator.set_transform(carla.Transform(
@@ -317,7 +363,7 @@ def main():
                 camera.stop()
         cleanup_actors(world)
         pygame.quit()
-        print("Script oprit curat.")
+        print("Exit.")
 
 if __name__ == "__main__":
     main()

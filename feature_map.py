@@ -8,8 +8,8 @@ import os
 import random
 
 
-MODEL_PATH = "model_nav.pth"
-DATASET_DIR = "dataset_processed"
+MODEL_PATH = "model_nav_traffic.pth"
+DATASET_DIR = "dataset_traffic_processed"
 DEVICE = "cpu"  
 
 
@@ -18,7 +18,7 @@ class ConditionalNvidiaModel(nn.Module):
         super().__init__()
         
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(3, 24, 5, stride=2), nn.ReLU(), 
+            nn.Conv2d(3, 24, 5, stride=2), nn.ReLU(),
             nn.Conv2d(24, 36, 5, stride=2), nn.ReLU(),
             nn.Conv2d(36, 48, 5, stride=2), nn.ReLU(),
             nn.Conv2d(48, 64, 3), nn.ReLU(),
@@ -26,12 +26,17 @@ class ConditionalNvidiaModel(nn.Module):
             nn.Flatten()
         )
         
-        self.command_fc = nn.Sequential(nn.Linear(1, 16), nn.ReLU())
+        self.command_fc = nn.Sequential(
+            nn.Linear(1, 16), nn.ReLU()
+        )
+
         self.joint_fc = nn.Sequential(
-            nn.Linear(1152 + 16, 100), nn.ReLU(),
-            nn.Linear(100, 50), nn.ReLU(),
-            nn.Linear(50, 10), nn.ReLU(),
-            nn.Linear(10, 1)
+            nn.Linear(1152 + 16, 256), nn.ReLU(),
+            nn.Dropout(p=0.3), 
+            nn.Linear(256, 128), nn.ReLU(),
+            nn.Dropout(p=0.2), 
+            nn.Linear(128, 64), nn.ReLU(),
+            nn.Linear(64, 3) 
         )
 
     def forward(self, img, cmd):

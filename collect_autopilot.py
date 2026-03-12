@@ -10,7 +10,7 @@ from pygame.locals import K_SPACE, K_ESCAPE, K_m, K_w, K_a, K_s, K_d
 import random
 import sys
 import glob
-import math  
+import math
 
 
 try:
@@ -21,7 +21,7 @@ except IndexError:
 from agents.navigation.basic_agent import BasicAgent
 from agents.navigation.local_planner import RoadOption
 
-ROOT_SAVE_FOLDER = "dataset_manual" 
+ROOT_SAVE_FOLDER = "dataset_traffic" 
 os.makedirs(ROOT_SAVE_FOLDER, exist_ok=True)
 
 def map_command(road_option):
@@ -32,9 +32,11 @@ def map_command(road_option):
 
 def cleanup_actors(world):
     actors = world.get_actors()
-    for actor in actors.filter('vehicle.*'):
-        actor.destroy()
     for actor in actors.filter('sensor.*'):
+        if actor.is_listening:
+            actor.stop()
+        actor.destroy()
+    for actor in actors.filter('vehicle.*'):
         actor.destroy()
     time.sleep(1) 
 
@@ -57,6 +59,7 @@ def save_image(image, control, command, episode_path, buffer_controls):
     pil_image = Image.fromarray(array)
     filename = f"{image.frame}.png"
     pil_image.save(os.path.join(episode_path, filename))
+    #VOLAN, ACCELERATIE, FRANA,COMANDA GPS
     buffer_controls.append([filename, control.steer, control.throttle, control.brake, command])
 
 def save_csv(episode_path, buffer_controls):
@@ -71,14 +74,38 @@ def save_csv(episode_path, buffer_controls):
         writer.writerows(buffer_controls)
     print(f" Salvat: {os.path.basename(episode_path)} | {len(buffer_controls)} imagini.")
 
+#Trafic
+def spawn_traffic(world, client, num_vehicles=30):
+    blueprint_library = world.get_blueprint_library()
+    spawn_points = world.get_map().get_spawn_points()
+    
+   
+    traffic_manager = client.get_trafficmanager(8000)
+    traffic_manager.set_global_distance_to_leading_vehicle(2.0)
+    
+    spawned_vehicles = []
+    random.shuffle(spawn_points)
+    
+    print(f"Incercam sa spawnam {num_vehicles} masini de trafic...")
+    for i in range(min(num_vehicles, len(spawn_points))):
+        bp = random.choice(blueprint_library.filter('vehicle.*'))
+        
+        if int(bp.get_attribute('number_of_wheels')) == 4:
+            npc = world.try_spawn_actor(bp, spawn_points[i])
+            if npc is not None:
+                npc.set_autopilot(True)
+                spawned_vehicles.append(npc)
+                
+    print(f"{len(spawned_vehicles)} vehicule in trafic.")
+    return spawned_vehicles
+
 def main():
     pygame.init()
-    
     display = pygame.display.set_mode((450, 400))
-    pygame.display.set_caption("Colectare Hibridă | SPACE=Rec | M=Manual")
+    pygame.display.set_caption("Colectare cu Trafic | SPACE=Rec | M=Manual")
     font = pygame.font.SysFont("Arial", 18)
 
-    print("Se conectează la simulator...")
+    print("Se conecteaza la simulator...")
     client = carla.Client("localhost", 2000)
     client.set_timeout(30.0) 
     world = client.get_world()
@@ -89,25 +116,35 @@ def main():
 
     cleanup_actors(world)
     blueprint_library = world.get_blueprint_library()
-
-    vehicle_bp = blueprint_library.filter("model3")[0]
     spawn_points = world.get_map().get_spawn_points()
-    spawn_point = np.random.choice(spawn_points) if spawn_points else carla.Transform()
-    vehicle = world.try_spawn_actor(vehicle_bp, spawn_point)
-    if not vehicle: return
+
+    
+    spawn_traffic(world, client, num_vehicles=40)
+    time.sleep(2.0) 
+
+    
+    vehicle_bp = blueprint_library.filter("model3")[0]
+    spawn_point = random.choice(spawn_points)
+    
+    
+    vehicle = None
+    while vehicle is None:
+        spawn_point = random.choice(spawn_points)
+        vehicle = world.try_spawn_actor(vehicle_bp, spawn_point)
     time.sleep(1.0)
 
-    # --- SETUP AGENT ---
+    
     agent = BasicAgent(vehicle, target_speed=20)
     agent.ignore_traffic_lights(active=True)
     agent.ignore_stop_signs(active=True)
+    
     
     current_wp = world.get_map().get_waypoint(vehicle.get_location())
     next_wps = current_wp.next(100.0)
     if next_wps: agent.set_destination(next_wps[0].transform.location)
     else: agent.set_destination(random.choice(spawn_points).location)
 
-    # --- SETUP CAMERA ---
+    
     camera_bp = blueprint_library.find("sensor.camera.rgb")
     camera_bp.set_attribute("image_size_x", "320")
     camera_bp.set_attribute("image_size_y", "240")
@@ -139,16 +176,12 @@ def main():
             
             if keys[K_ESCAPE]: break
 
-
             #AUTOPILOT/MANUAL
- 
             if keys[K_m] and not m_pressed_last_frame:
                 autopilot_enabled = not autopilot_enabled
-                print(f"\n>>> MOD CONDUS: {'🤖 AUTOPILOT' if autopilot_enabled else '🕹️ MANUAL (WASD)'} <<<")
+                print(f"\n>>> MOD CONDUS: {'AUTOPILOT' if autopilot_enabled else 'MANUAL (WASD)'} <<<")
             m_pressed_last_frame = keys[K_m]
 
-            
-            #GPS
             
             if agent.done():
                 current_loc = vehicle.get_location()
@@ -167,27 +200,21 @@ def main():
                 manual_steer = auto_control.steer 
             else:
                 control_to_apply = carla.VehicleControl()
-                
-               
                 if keys[K_w]: control_to_apply.throttle = 0.5
                 elif keys[K_s]: control_to_apply.brake = 1.0
                 else: control_to_apply.throttle = 0.0
                 
-                
                 steer_speed = 0.05
-                if keys[K_a]:
-                    manual_steer = max(-1.0, manual_steer - steer_speed)
-                elif keys[K_d]:
-                    manual_steer = min(1.0, manual_steer + steer_speed)
+                if keys[K_a]: manual_steer = max(-1.0, manual_steer - steer_speed)
+                elif keys[K_d]: manual_steer = min(1.0, manual_steer + steer_speed)
                 else:
                     if manual_steer > 0: manual_steer = max(0.0, manual_steer - steer_speed)
                     elif manual_steer < 0: manual_steer = min(0.0, manual_steer + steer_speed)
-                
                 control_to_apply.steer = manual_steer
 
             vehicle.apply_control(control_to_apply)
 
-          
+            
             if keys[K_SPACE] and not is_recording:
                 is_recording = True
                 current_episode_path = get_next_episode_path(ROOT_SAVE_FOLDER)
@@ -205,8 +232,9 @@ def main():
             driver_str = "AUTO" if autopilot_enabled else "MANUAL"
             cmd_str = ["LANE", "LEFT", "RIGHT", "STRAIGHT"][current_command]
             
+            
             text_1 = font.render(f"Driver: {driver_str} | REC: {'DA' if is_recording else 'NU'}", True, (255,255,255))
-            text_2 = font.render(f"GPS CMD: {cmd_str} | Steer: {control_to_apply.steer:.2f}", True, (255,255,255))
+            text_2 = font.render(f"GPS: {cmd_str} | S: {control_to_apply.steer:.2f} | T: {control_to_apply.throttle:.2f} | B: {control_to_apply.brake:.2f}", True, (255,255,255))
             text_3 = font.render(f"[M] Toggle Manual | [SPACE] Hold to Record", True, (150,150,150))
             text_4 = font.render(f"RADAR GPS (2D) \/", True, (255, 255, 0))
             
@@ -219,40 +247,30 @@ def main():
                 v_transform = vehicle.get_transform()
                 v_x = v_transform.location.x
                 v_y = v_transform.location.y
-                
                 v_yaw = math.radians(v_transform.rotation.yaw)
                 
                 route_trace = list(agent.get_local_planner()._waypoints_queue)
-                
-                
                 radar_center_x, radar_center_y = 225, 350
-                
-               
                 pygame.draw.circle(display, (0, 150, 255), (radar_center_x, radar_center_y), 6)
 
-                for wp, _ in route_trace[:30]:
+                for wp, _ in route_trace:
                     w_x = wp.transform.location.x
                     w_y = wp.transform.location.y
-                    
-            
                     dx = w_x - v_x
                     dy = w_y - v_y
                     
-                   
+                    dist = math.sqrt(dx**2 + dy**2)
                     rel_x = dx * math.cos(v_yaw) + dy * math.sin(v_yaw)
                     rel_y = -dx * math.sin(v_yaw) + dy * math.cos(v_yaw)
                     
-                    
-                    scale = 4  
-                    screen_x = int(radar_center_x + rel_y * scale)
-                    screen_y = int(radar_center_y - rel_x * scale) 
-                    
-                    
-                    if 0 <= screen_x <= 450 and 0 <= screen_y <= 400:
-                        pygame.draw.circle(display, (0, 255, 0), (screen_x, screen_y), 3)
+                    if dist < 40.0 and rel_x > -2.0:
+                        scale = 4  
+                        screen_x = int(radar_center_x + rel_y * scale)
+                        screen_y = int(radar_center_y - rel_x * scale) 
+                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 400:
+                            pygame.draw.circle(display, (0, 255, 0), (screen_x, screen_y), 3)
 
             pygame.display.flip()
-            
 
             if vehicle.is_alive:
                 t = vehicle.get_transform()
@@ -265,20 +283,21 @@ def main():
                 last_image = None
                 while not image_queue.empty(): last_image = image_queue.get_nowait()
                 
+                
                 if is_recording and last_image is not None:
-                    speed = vehicle.get_velocity()
-                    speed_kmh = (3.6 * np.sqrt(speed.x**2 + speed.y**2 + speed.z**2))
-                    if speed_kmh > 1.0:
-                        save_image(last_image, control_to_apply, current_command, current_episode_path, buffer_controls)
+                    save_image(last_image, control_to_apply, current_command, current_episode_path, buffer_controls)
             except queue.Empty: pass
 
     finally:
+        print("\n[OPRIRE] Se opresc senzorii și se curata traficul...")
         if is_recording and buffer_controls:
             save_csv(current_episode_path, buffer_controls)
-        if camera: camera.destroy()
-        if vehicle: vehicle.destroy()
+        if 'camera' in locals() and camera is not None:
+            if camera.is_listening:
+                camera.stop()
+        cleanup_actors(world) 
         pygame.quit()
-        print("Script oprit.")
+        print("Exit.")
 
 if __name__ == "__main__":
     main()

@@ -4,21 +4,22 @@ import random
 from PIL import Image
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms
-import torchvision.transforms.functional as TF
+import matplotlib.pyplot as plt 
 
 
-DATASET_DIR = "dataset_processed"
-MODEL_SAVE_PATH = "model_nav.pth"
+DATASET_DIR = "dataset_traffic_processed"  
+MODEL_SAVE_PATH = "model_nav_traffic.pth"  
+GRAPH_SAVE_PATH = "training_history.png" 
 
 BATCH_SIZE = 64 
-NUM_EPOCHS = 35
-LEARNING_RATE = 1e-4    
+NUM_EPOCHS = 40          
+LEARNING_RATE = 3e-4     
+VAL_SPLIT = 0.15         
 
-NUM_WORKERS = 8        
-PREFETCH_FACTOR = 2
-
+NUM_WORKERS = 0        
+PREFETCH_FACTOR = None
 
 if torch.cuda.is_available():
     DEVICE = "cuda"
@@ -29,15 +30,13 @@ else:
     PIN_MEMORY = False
     PERSISTENT_WORKERS = False
 
-
 def convert_yuv(img):
     return img.convert("YCbCr")
-
 
 class CarlaNavDataset(Dataset):
     def __init__(self, root):
         self.images = []
-        self.steering = []
+        self.labels = [] 
         self.commands = []
 
         if not os.path.exists(root):
@@ -63,13 +62,15 @@ class CarlaNavDataset(Dataset):
                     try:
                         img_name = row[0]
                         steer_val = float(row[1])
+                        throttle_val = float(row[2]) 
+                        brake_val = float(row[3])    
                         cmd_val = int(row[4]) 
                         
                         full_img_path = os.path.join(episode_path, img_name)
                         
                         if os.path.exists(full_img_path):
                             self.images.append(full_img_path)
-                            self.steering.append(steer_val)
+                            self.labels.append([steer_val, throttle_val, brake_val]) 
                             self.commands.append(cmd_val)
                     except (ValueError, IndexError):
                         continue 
@@ -84,16 +85,13 @@ class CarlaNavDataset(Dataset):
 
     def __getitem__(self, idx):
         try:
-            img = Image.open(self.images[idx])
+            img = Image.open(self.images[idx]).convert("RGB") 
             img = self.transform_pipeline(img)
-            
-            steer = self.steering[idx]
             cmd = self.commands[idx]
-            
-            return img, torch.tensor(cmd, dtype=torch.float32), torch.tensor(steer, dtype=torch.float32)
-            
+            targets = self.labels[idx]
+            return img, torch.tensor(cmd, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
         except Exception as e:
-            return torch.zeros((3, 66, 200)), torch.tensor(0, dtype=torch.float32), torch.tensor(0.0, dtype=torch.float32)
+            return torch.zeros((3, 66, 200)), torch.tensor(0, dtype=torch.float32), torch.zeros(3, dtype=torch.float32)
 
 
 class ConditionalNvidiaModel(nn.Module):
@@ -114,10 +112,12 @@ class ConditionalNvidiaModel(nn.Module):
         )
 
         self.joint_fc = nn.Sequential(
-            nn.Linear(1152 + 16, 100), nn.ReLU(),
-            nn.Linear(100, 50), nn.ReLU(),
-            nn.Linear(50, 10), nn.ReLU(),
-            nn.Linear(10, 1)
+            nn.Linear(1152 + 16, 256), nn.ReLU(),
+            nn.Dropout(p=0.3), 
+            nn.Linear(256, 128), nn.ReLU(),
+            nn.Dropout(p=0.2), 
+            nn.Linear(128, 64), nn.ReLU(),
+            nn.Linear(64, 3) 
         )
 
     def forward(self, img, cmd):
@@ -127,59 +127,101 @@ class ConditionalNvidiaModel(nn.Module):
         combined = torch.cat((img_features, cmd_features), dim=1)
         return self.joint_fc(combined)
 
-
 def train():
-
     print("\n" + "="*50)
-    if DEVICE == "cuda":
-        print(f" [V] ANTRENARE PE GPU: {torch.cuda.get_device_name(0)}")
-    else:
-        print(" [X] ATENȚIE: GPU indisponibil, se folosește CPU (LENT!)")
+    print(f" [V] ANTRENARE PE: {torch.cuda.get_device_name(0) if DEVICE == 'cuda' else 'CPU'}")
     print("="*50 + "\n")
     
-    print(f"--- INCEPERE ANTRENARE NAVIGATIE ---")
-    
     dataset = CarlaNavDataset(DATASET_DIR)
-    print(f" -> {len(dataset)} imagini cu comenzi gasite și pregătite.")
+    total_data = len(dataset)
+    print(f" -> {total_data} imagini găsite.")
     
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=BATCH_SIZE, 
-        shuffle=True, 
-        num_workers=NUM_WORKERS,        
-        pin_memory=PIN_MEMORY,          
-        persistent_workers=PERSISTENT_WORKERS, 
-        prefetch_factor=PREFETCH_FACTOR, 
-        drop_last=True                  
-    )
+    if total_data == 0:
+        return
+
+    val_size = int(total_data * VAL_SPLIT)
+    train_size = total_data - val_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+    
+    print(f" -> Antrenare pe: {train_size} imagini | Validare pe: {val_size} imagini\n")
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
+                              num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY, drop_last=True)
+                              
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, 
+                            num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
 
     model = ConditionalNvidiaModel().to(DEVICE)
     loss_fn = nn.MSELoss()
     opt = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=3)
+
+    best_val_loss = float('inf')
+    
+    
+    history_train_loss = []
+    history_val_loss = []
 
     for epoch in range(NUM_EPOCHS):
         model.train() 
-        total_loss = 0
+        train_loss = 0
         
-        for batch, (imgs, cmds, labels) in enumerate(dataloader):
-            imgs = imgs.to(DEVICE)
-            cmds = cmds.to(DEVICE)
-            labels = labels.to(DEVICE)
+        for imgs, cmds, labels in train_loader:
+            imgs, cmds, labels = imgs.to(DEVICE), cmds.to(DEVICE), labels.to(DEVICE)
 
             pred = model(imgs, cmds)
-            loss = loss_fn(pred.squeeze(), labels)
+            loss = loss_fn(pred, labels) 
 
             opt.zero_grad()
             loss.backward()
             opt.step()
+            train_loss += loss.item()
 
-            total_loss += loss.item()
+        avg_train_loss = train_loss / len(train_loader)
 
-        avg_loss = total_loss / len(dataloader)
-        print(f"Epoch {epoch+1:02d}/{NUM_EPOCHS} — loss = {avg_loss:.6f}")
+        model.eval() 
+        val_loss = 0
+        with torch.no_grad():
+            for imgs, cmds, labels in val_loader:
+                imgs, cmds, labels = imgs.to(DEVICE), cmds.to(DEVICE), labels.to(DEVICE)
+                pred = model(imgs, cmds)
+                loss = loss_fn(pred, labels)
+                val_loss += loss.item()
+                
+        avg_val_loss = val_loss / len(val_loader)
+        
+        scheduler.step(avg_val_loss)
+        
+        # --- Salvăm datele pentru grafic ---
+        history_train_loss.append(avg_train_loss)
+        history_val_loss.append(avg_val_loss)
 
-    torch.save(model.state_dict(), MODEL_SAVE_PATH)
-    print(f"\nModel salvat: '{MODEL_SAVE_PATH}'")
+        saved_flag = ""
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), MODEL_SAVE_PATH)
+            saved_flag = " [MODEL SALVAT]"
+
+        print(f"Epoch {epoch+1:02d}/{NUM_EPOCHS} | Train Loss: {avg_train_loss:.5f} | Val Loss: {avg_val_loss:.5f}{saved_flag}")
+
+    print(f"\nAntrenare completa! Cu o eroare de validare de {best_val_loss:.5f}")
+
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, NUM_EPOCHS + 1), history_train_loss, label='Train Loss', color='blue', linewidth=2)
+    plt.plot(range(1, NUM_EPOCHS + 1), history_val_loss, label='Validation Loss', color='orange', linewidth=2, linestyle='--')
+    
+   
+    best_epoch = history_val_loss.index(min(history_val_loss)) + 1
+    plt.scatter(best_epoch, min(history_val_loss), color='red', s=100, zorder=5, label=f'Best Model (Epoca {best_epoch})')
+
+   
+    plt.xlabel("Epoca", fontsize=12)
+    plt.ylabel("Eroare (MSE Loss)", fontsize=12)
+    plt.grid(True, linestyle=':', alpha=0.7)
+    plt.legend(fontsize=11)
+    plt.show()
 
 if __name__ == "__main__":
     train()
