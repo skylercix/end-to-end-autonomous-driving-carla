@@ -10,13 +10,13 @@ import torchvision.transforms.functional as TF
 
 
 DATASET_DIR = "dataset_processed"
-MODEL_SAVE_PATH = "model.pth"
+MODEL_SAVE_PATH = "model_nav.pth"
 
 BATCH_SIZE = 64 
 NUM_EPOCHS = 35
 LEARNING_RATE = 1e-4    
 
-NUM_WORKERS = 4       
+NUM_WORKERS = 8        
 PREFETCH_FACTOR = 2
 
 
@@ -29,35 +29,26 @@ else:
     PIN_MEMORY = False
     PERSISTENT_WORKERS = False
 
-# ==========================================
-#  TRANSFORMARI
-# ==========================================
-def crop_img(img):
-    # crop (top 80px) 
-    return img.crop((0, 80, 320, 240))
 
 def convert_yuv(img):
     return img.convert("YCbCr")
 
-# ==========================================
-#  DATASET
-# ==========================================
-class CarlaDataset(Dataset):
+
+class CarlaNavDataset(Dataset):
     def __init__(self, root):
         self.images = []
         self.steering = []
+        self.commands = []
 
         if not os.path.exists(root):
-             raise FileNotFoundError(f"Folderul {root} nu exista! Ai rulat process_data.py?")
+             raise FileNotFoundError(f"Folderul {root} nu exista!")
 
-        print(f"Se scaneaza dataset-ul in: {root} ...")
-        
         for episode_folder in os.listdir(root):
             episode_path = os.path.join(root, episode_folder)
             if not os.path.isdir(episode_path):
                 continue
             
-            csv_path = os.path.join(episode_path, "controls.csv")
+            csv_path = os.path.join(episode_path, "controls_nav.csv")
             if not os.path.exists(csv_path):
                 continue
             
@@ -72,23 +63,19 @@ class CarlaDataset(Dataset):
                     try:
                         img_name = row[0]
                         steer_val = float(row[1])
+                        cmd_val = int(row[4]) 
+                        
                         full_img_path = os.path.join(episode_path, img_name)
                         
                         if os.path.exists(full_img_path):
                             self.images.append(full_img_path)
                             self.steering.append(steer_val)
-                    except ValueError:
+                            self.commands.append(cmd_val)
+                    except (ValueError, IndexError):
                         continue 
 
-        print(f" {len(self.images)} imagini valide gasite.")
-
-        if len(self.images) == 0:
-            raise RuntimeError(f"Nu exista nicio imagine valida in {root}!")
-
         self.transform_pipeline = transforms.Compose([
-            transforms.Lambda(crop_img),        
             transforms.Lambda(convert_yuv),     
-            transforms.Resize((66, 200)),       
             transforms.ToTensor(),
         ])
 
@@ -97,57 +84,63 @@ class CarlaDataset(Dataset):
 
     def __getitem__(self, idx):
         try:
-            img = Image.open(self.images[idx]).convert("RGB")
+            img = Image.open(self.images[idx])
+            img = self.transform_pipeline(img)
+            
+            steer = self.steering[idx]
+            cmd = self.commands[idx]
+            
+            return img, torch.tensor(cmd, dtype=torch.float32), torch.tensor(steer, dtype=torch.float32)
+            
         except Exception as e:
-            print(f"Eroare: {e}")
-            return torch.zeros((3, 66, 200)), torch.tensor(0.0, dtype=torch.float32)
+            return torch.zeros((3, 66, 200)), torch.tensor(0, dtype=torch.float32), torch.tensor(0.0, dtype=torch.float32)
 
-        steer = self.steering[idx]
 
-        # Augmentare: Flip Orizontal 50% 
-        
-        if random.random() > 0.5:
-            img = TF.hflip(img)
-            steer = -steer
-
-        img = self.transform_pipeline(img)
-        return img, torch.tensor(steer, dtype=torch.float32)
-
-# ==========================================
-#  MODEL
-# ==========================================
-class SmallNvidiaModel(nn.Module):
+class ConditionalNvidiaModel(nn.Module):
     def __init__(self):
         super().__init__()
-        self.net = nn.Sequential(
+        
+        self.conv_layers = nn.Sequential(
             nn.Conv2d(3, 24, 5, stride=2), nn.ReLU(),
             nn.Conv2d(24, 36, 5, stride=2), nn.ReLU(),
             nn.Conv2d(36, 48, 5, stride=2), nn.ReLU(),
             nn.Conv2d(48, 64, 3), nn.ReLU(),
             nn.Conv2d(64, 64, 3), nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(64 * 1 * 18, 100), nn.ReLU(),
+            nn.Flatten()
+        )
+        
+        self.command_fc = nn.Sequential(
+            nn.Linear(1, 16), nn.ReLU()
+        )
+
+        self.joint_fc = nn.Sequential(
+            nn.Linear(1152 + 16, 100), nn.ReLU(),
             nn.Linear(100, 50), nn.ReLU(),
             nn.Linear(50, 10), nn.ReLU(),
             nn.Linear(10, 1)
         )
 
-    def forward(self, x):
-        return self.net(x)
+    def forward(self, img, cmd):
+        img_features = self.conv_layers(img)
+        cmd = cmd.view(-1, 1)
+        cmd_features = self.command_fc(cmd)
+        combined = torch.cat((img_features, cmd_features), dim=1)
+        return self.joint_fc(combined)
 
-# ==========================================
-#  TRAIN LOOP
-# ==========================================
+
 def train():
-    print(f"\n--- INCEPERE ANTRENARE ---")
-    if DEVICE == "cuda":
-        print(f" GPU Activat: {torch.cuda.get_device_name(0)}")
-    else:
-        print(" Se foloseste CPU.")
-        
-    print(f"Batch Size: {BATCH_SIZE} | Dataset: {DATASET_DIR}")
 
-    dataset = CarlaDataset(DATASET_DIR)
+    print("\n" + "="*50)
+    if DEVICE == "cuda":
+        print(f" [V] ANTRENARE PE GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print(" [X] ATENȚIE: GPU indisponibil, se folosește CPU (LENT!)")
+    print("="*50 + "\n")
+    
+    print(f"--- INCEPERE ANTRENARE NAVIGATIE ---")
+    
+    dataset = CarlaNavDataset(DATASET_DIR)
+    print(f" -> {len(dataset)} imagini cu comenzi gasite și pregătite.")
     
     dataloader = DataLoader(
         dataset, 
@@ -160,21 +153,20 @@ def train():
         drop_last=True                  
     )
 
-    model = SmallNvidiaModel().to(DEVICE)
+    model = ConditionalNvidiaModel().to(DEVICE)
     loss_fn = nn.MSELoss()
     opt = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-
-    print("\n Se începe antrenarea...")
 
     for epoch in range(NUM_EPOCHS):
         model.train() 
         total_loss = 0
         
-        for batch, (imgs, labels) in enumerate(dataloader):
+        for batch, (imgs, cmds, labels) in enumerate(dataloader):
             imgs = imgs.to(DEVICE)
+            cmds = cmds.to(DEVICE)
             labels = labels.to(DEVICE)
 
-            pred = model(imgs)
+            pred = model(imgs, cmds)
             loss = loss_fn(pred.squeeze(), labels)
 
             opt.zero_grad()
@@ -184,10 +176,10 @@ def train():
             total_loss += loss.item()
 
         avg_loss = total_loss / len(dataloader)
-        print(f"Epoch {epoch+1}/{NUM_EPOCHS} — loss = {avg_loss:.5f}")
+        print(f"Epoch {epoch+1:02d}/{NUM_EPOCHS} — loss = {avg_loss:.6f}")
 
     torch.save(model.state_dict(), MODEL_SAVE_PATH)
-    print(f"\nModel salvat cu succes: '{MODEL_SAVE_PATH}'")
+    print(f"\nModel salvat: '{MODEL_SAVE_PATH}'")
 
 if __name__ == "__main__":
     train()
