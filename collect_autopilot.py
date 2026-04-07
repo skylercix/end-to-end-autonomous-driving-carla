@@ -176,7 +176,7 @@ def main():
             
             if keys[K_ESCAPE]: break
 
-            #AUTOPILOT/MANUAL
+            
             if keys[K_m] and not m_pressed_last_frame:
                 autopilot_enabled = not autopilot_enabled
                 print(f"\n>>> MOD CONDUS: {'AUTOPILOT' if autopilot_enabled else 'MANUAL (WASD)'} <<<")

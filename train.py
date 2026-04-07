@@ -7,6 +7,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms
 import matplotlib.pyplot as plt 
+import torch.nn.functional as F
 
 
 DATASET_DIR = "dataset_traffic_processed"  
@@ -108,7 +109,7 @@ class ConditionalNvidiaModel(nn.Module):
         )
         
         self.command_fc = nn.Sequential(
-            nn.Linear(1, 16), nn.ReLU()
+            nn.Linear(4, 16), nn.ReLU()
         )
 
         self.joint_fc = nn.Sequential(
@@ -122,8 +123,8 @@ class ConditionalNvidiaModel(nn.Module):
 
     def forward(self, img, cmd):
         img_features = self.conv_layers(img)
-        cmd = cmd.view(-1, 1)
-        cmd_features = self.command_fc(cmd)
+        cmd_onehot = F.one_hot(cmd.long(), num_classes=4).float()
+        cmd_features = self.command_fc(cmd_onehot)
         combined = torch.cat((img_features, cmd_features), dim=1)
         return self.joint_fc(combined)
 
