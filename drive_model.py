@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 import queue
 import pygame
-from pygame.locals import K_ESCAPE, K_v, K_r
+from pygame.locals import K_ESCAPE, K_v, K_r, K_m, K_1, K_2, K_3, K_4, K_5
 import random
 import sys
 import glob
@@ -14,18 +14,34 @@ import torch
 import torch.nn as nn
 from torchvision import transforms
 import torch.nn.functional as F
-from agents.navigation.basic_agent import BasicAgent
-from agents.navigation.local_planner import RoadOption
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
 
 try:
     sys.path.append(glob.glob('../carla')[0])
 except IndexError:
     pass
 
+from agents.navigation.basic_agent import BasicAgent
+from agents.navigation.local_planner import RoadOption
+
 
 MODEL_PATH = "model_nav_traffic.pth" 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 STEERING_HISTORY_SIZE = 2 
+
+# --- HOOK PENTRU FEATURE MAPS ---
+activation = {}
+def get_activation(name):
+    def hook(model, input, output):
+        activation[name] = output.detach()
+    return hook
+
+
+CONV_LAYER_INDICES = {1: 0, 2: 2, 3: 4, 4: 6, 5: 8}
+CONV_LAYER_NAMES = {1: 'conv1', 2: 'conv2', 3: 'conv3', 4: 'conv4', 5: 'conv5'}
+
 
 def map_command(road_option):
     if road_option == RoadOption.LEFT: return 1
@@ -110,6 +126,16 @@ def image_to_tensor(image):
     pil_image = Image.fromarray(array)
     return transform_pipeline(pil_image).unsqueeze(0).to(DEVICE)
 
+def carla_image_to_rgb(image):
+    """Extrage imaginea RGB din cadrul CARLA (pentru afișare în heatmap)."""
+    image.convert(carla.ColorConverter.Raw)
+    array = np.frombuffer(image.raw_data, dtype=np.uint8)
+    array = array.reshape((image.height, image.width, 4))[:, :, :3][:, :, ::-1]
+    pil_image = Image.fromarray(array)
+    pil_cropped = pil_image.crop((0, 80, 320, 240))
+    pil_resized = pil_cropped.resize((200, 66))
+    return np.array(pil_resized)
+
 
 def main():
     pygame.init()
@@ -139,6 +165,11 @@ def main():
     else:
         print(f"\n[EROARE] Nu am gasit fisierul {MODEL_PATH}!")
         return
+
+    #hook-uri pe TOATE cele 5 straturi conv
+    for layer_num, layer_idx in CONV_LAYER_INDICES.items():
+        layer_name = CONV_LAYER_NAMES[layer_num]
+        model.conv_layers[layer_idx].register_forward_hook(get_activation(layer_name))
 
     cleanup_actors(world)
     blueprint_library = world.get_blueprint_library()
@@ -186,6 +217,15 @@ def main():
     follow_mode = True
     current_command = 0
 
+    # --- HEATMAP STATE ---
+    show_heatmap = False
+    m_pressed_last_frame = False
+    heatmap_fig = None
+    heatmap_ax = None
+    heatmap_im = None
+    last_raw_image = None
+    active_layer = 1  # stratul activ (1-5)
+
     try:
         while True:
             clock.tick(60)
@@ -197,8 +237,46 @@ def main():
             if keys[K_v]:
                 follow_mode = not follow_mode
                 time.sleep(0.3)
+
+            # Toggle M
+            if keys[K_m] and not m_pressed_last_frame:
+                show_heatmap = not show_heatmap
+                if show_heatmap:
+                    plt.ion()
+                    heatmap_fig, heatmap_ax = plt.subplots(1, 1, figsize=(8, 3))
+                    heatmap_fig.canvas.manager.set_window_title("LIVE Heatmap")
+                    heatmap_ax.set_title(f"Live heatmap (Conv{active_layer})", fontsize=12)
+                    heatmap_ax.axis('off')
+                    dummy = np.zeros((66, 200, 3), dtype=np.uint8)
+                    heatmap_im = heatmap_ax.imshow(dummy)
+                    plt.tight_layout()
+                    plt.show(block=False)
+                    print(f"[HEATMAP] Fereastra deschisa — Conv{active_layer}. Taste 1-5 pentru a schimba stratul.")
+                else:
+                    if heatmap_fig is not None:
+                        plt.close(heatmap_fig)
+                        heatmap_fig = None
+                        heatmap_ax = None
+                        heatmap_im = None
+                    print("[HEATMAP] Fereastra inchisa.")
+            m_pressed_last_frame = keys[K_m]
+
+            # Schimba stratu cu tastele 1-5
+            for key, layer_num in [(K_1, 1), (K_2, 2), (K_3, 3), (K_4, 4), (K_5, 5)]:
+                if keys[key] and active_layer != layer_num:
+                    active_layer = layer_num
+                    if show_heatmap and heatmap_ax is not None:
+                        heatmap_ax.set_title(f"LIVE Heatmap (Conv{active_layer})", fontsize=12)
+                    print(f"[HEATMAP] Strat schimbat -> Conv{active_layer}")
+                    time.sleep(0.2)
+                    break
+
             if keys[K_r]:
-                
+                if show_heatmap and heatmap_fig is not None:
+                    plt.close(heatmap_fig)
+                    heatmap_fig = None
+                    show_heatmap = False
+
                 if camera.is_listening:
                     camera.stop()
                 cleanup_actors(world)
@@ -254,6 +332,7 @@ def main():
                     last_image = image_queue.get_nowait()
 
                 if last_image is not None:
+                    last_raw_image = last_image
                     img_t = image_to_tensor(last_image)
                     cmd_t = torch.tensor([current_command], dtype=torch.long).to(DEVICE)
 
@@ -285,22 +364,62 @@ def main():
                             control_to_apply.throttle = 0.0
 
                     vehicle.apply_control(control_to_apply)
+
+                    # --- ACTUALIZAARE HEATMAP LIVE ---
+                    active_layer_name = CONV_LAYER_NAMES[active_layer]
+                    if show_heatmap and heatmap_fig is not None and active_layer_name in activation and last_raw_image is not None:
+                        try:
+                            rgb_frame = carla_image_to_rgb(last_raw_image)
+
+                            act = activation[active_layer_name].squeeze().cpu().numpy()
+                            mean_activation = np.mean(act, axis=0)
+
+                            mean_activation = mean_activation - mean_activation.min()
+                            if mean_activation.max() > 0:
+                                mean_activation = mean_activation / mean_activation.max()
+
+                            act_pil = Image.fromarray((mean_activation * 255).astype(np.uint8))
+                            act_resized = act_pil.resize((200, 66), Image.BILINEAR)
+                            act_np = np.array(act_resized).astype(np.float32) / 255.0
+
+                            heatmap_colored = plt.cm.jet(act_np)[:, :, :3]
+
+                            rgb_normalized = rgb_frame.astype(np.float32) / 255.0
+                            alpha = 0.5
+                            overlay = (1 - alpha) * rgb_normalized + alpha * heatmap_colored
+                            overlay = np.clip(overlay, 0, 1)
+
+                            heatmap_im.set_data(overlay)
+                            heatmap_fig.canvas.draw_idle()
+                            heatmap_fig.canvas.flush_events()
+                        except Exception:
+                            pass
+
             except queue.Empty:
                 pass
 
-            # --- DISPLAY ---
+            # --- DISPLAY PYGAME ---
             display.fill((0, 0, 0))
             cmd_str = ["LANE", "LEFT", "RIGHT", "STRAIGHT"][current_command]
 
             text_1 = font.render(f"Driver: AI | Model: {MODEL_PATH}", True, (255,255,255))
             text_2 = font.render(f"GPS: {cmd_str} | Steer: {control_to_apply.steer:.2f} | T: {control_to_apply.throttle:.2f} | B: {control_to_apply.brake:.2f}", True, (255,255,255))
-            text_3 = font.render(f"[V] Camera | [R] Respawn | [ESC] Exit", True, (150,150,150))
+            text_3 = font.render(f"[V] Camera | [R] Respawn | [M] Heatmap | [ESC] Exit", True, (150,150,150))
             text_4 = font.render(f"RADAR GPS (2D) \/", True, (255, 255, 0))
+            
+            if show_heatmap:
+                heatmap_status = f"HEATMAP: ON | Conv{active_layer} | [1-5] Schimba strat"
+                color_status = (0, 255, 0)
+            else:
+                heatmap_status = "HEATMAP: OFF | [M] Deschide"
+                color_status = (150, 150, 150)
+            text_5 = font.render(heatmap_status, True, color_status)
 
             display.blit(text_1, (10, 10))
             display.blit(text_2, (10, 40))
             display.blit(text_3, (10, 70))
-            display.blit(text_4, (155, 120))
+            display.blit(text_5, (10, 100))
+            display.blit(text_4, (155, 130))
 
             if vehicle.is_alive:
                 v_transform = vehicle.get_transform()
@@ -337,8 +456,16 @@ def main():
                     carla.Rotation(pitch=-15.0, yaw=t.rotation.yaw)
                 ))
 
+            if show_heatmap and heatmap_fig is not None:
+                try:
+                    heatmap_fig.canvas.flush_events()
+                except Exception:
+                    pass
+
     finally:
         print("\n[OPRIRE] Se opresc senzorii și conexiunea...")
+        if show_heatmap and heatmap_fig is not None:
+            plt.close(heatmap_fig)
         if camera is not None and camera.is_listening:
             camera.stop()
         cleanup_actors(world)

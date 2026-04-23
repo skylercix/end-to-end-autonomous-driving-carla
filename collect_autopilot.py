@@ -74,14 +74,15 @@ def save_csv(episode_path, buffer_controls):
         writer.writerows(buffer_controls)
     print(f" Salvat: {os.path.basename(episode_path)} | {len(buffer_controls)} imagini.")
 
-#Trafic
-def spawn_traffic(world, client, num_vehicles=30):
+#Trafic - versiune imbunatatita cu dinamica mai realista
+def spawn_traffic(world, client, num_vehicles=25):
     blueprint_library = world.get_blueprint_library()
     spawn_points = world.get_map().get_spawn_points()
     
-   
     traffic_manager = client.get_trafficmanager(8000)
-    traffic_manager.set_global_distance_to_leading_vehicle(2.0)
+    traffic_manager.set_global_distance_to_leading_vehicle(1.5)       # distanta mai mica intre masini
+    traffic_manager.global_percentage_speed_difference(-20)            # conduc cu 20% peste limita (mai agresive)
+    traffic_manager.set_synchronous_mode(False)
     
     spawned_vehicles = []
     random.shuffle(spawn_points)
@@ -94,9 +95,16 @@ def spawn_traffic(world, client, num_vehicles=30):
             npc = world.try_spawn_actor(bp, spawn_points[i])
             if npc is not None:
                 npc.set_autopilot(True)
+                
+                # Fiecare NPC are comportament diferit
+                traffic_manager.ignore_lights_percentage(npc, 30)                          # 30% ignora semafoare
+                traffic_manager.ignore_walkers_percentage(npc, 0)                           # nu ignora pietoni
+                traffic_manager.vehicle_percentage_speed_difference(npc, random.uniform(-30, 10))  # viteze variate: -30=rapid, +10=lent
+                traffic_manager.distance_to_leading_vehicle(npc, random.uniform(1.0, 3.0))         # distante variate
+                
                 spawned_vehicles.append(npc)
                 
-    print(f"{len(spawned_vehicles)} vehicule in trafic.")
+    print(f"{len(spawned_vehicles)} vehicule in trafic (dinamica imbunatatita).")
     return spawned_vehicles
 
 def main():
@@ -119,7 +127,7 @@ def main():
     spawn_points = world.get_map().get_spawn_points()
 
     
-    spawn_traffic(world, client, num_vehicles=40)
+    spawn_traffic(world, client, num_vehicles=25)
     time.sleep(2.0) 
 
     

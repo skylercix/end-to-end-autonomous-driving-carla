@@ -199,8 +199,7 @@ This will remove any existing `dataset_traffic_processed/` and recreate it from 
   - saves the **best model checkpoint** as `model_nav_traffic.pth`
   - saves a plot of the loss curves as `training_history.png` and also shows it.
 
-Example training history (MSE loss vs. epochs):<img width="846" height="516" alt="image" src="https://github.com/user-attachments/assets/2c0ac264-3809-4261-a118-297de06d7132" />
-
+Example training history (MSE loss vs. epochs):
 
 
 
