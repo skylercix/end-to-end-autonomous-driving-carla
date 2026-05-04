@@ -1,0 +1,6 @@
+timestamp,model,dataset_size,epochs,best_epoch,learning_rate,best_val_loss,final_train_loss,notes
+2025-01-01 00:00,CNN,9485,40,~35,3e-4,0.03700,-,"Prima antrenare CNN, dataset initial"
+2025-01-15 00:00,ViT (GPS concat),9485,60,44,1e-4,0.05080,-,ViT v1 - GPS concatenat la final dupa transformer
+2025-02-01 00:00,ViT (GPS-as-Token),13000,60,60,1e-4,0.05100,-,ViT v2 - GPS ca token in secventa transformer
+2026-05-04 13:37,CNN,13451,40,27,0.0003,0.03575,0.02835,"NVIDIA CNN conditionat, MSE loss, Adam, ReduceLROnPlateau"
+2026-05-04 17:21,ViT Hybrid (Conv Stem + GPS Token),13451,60,51,0.0001,0.04446,0.04242,"Conv Stem 3->48->96->128, 225 tokens, weighted loss s=3.0 t=1.0 b=1.0, aug: ColorJitter+Affine+Erasing"

@@ -24,23 +24,23 @@ from agents.navigation.local_planner import RoadOption
 ROOT_SAVE_FOLDER = "dataset_traffic" 
 os.makedirs(ROOT_SAVE_FOLDER, exist_ok=True)
 
-# === PRESET-URI DE VREME ===
-# Fiecare preset schimba dramatic aspectul vizual al aceleiasi strazi
+# === PRESETURI DE VREME ===
+
 WEATHER_PRESETS = {
     "ZI_SENINA": carla.WeatherParameters(
         sun_altitude_angle=70.0,       # soare sus
-        cloudiness=10.0,               # cer senin
-        precipitation=0.0,             # fara ploaie
-        precipitation_deposits=0.0,    # asfalt uscat
+        cloudiness=10.0,               
+        precipitation=0.0,             
+        precipitation_deposits=0.0,    
         wind_intensity=10.0,
-        fog_density=0.0,               # fara ceata
+        fog_density=0.0,               
         fog_distance=0.0,
-        wetness=0.0,                   # totul uscat
+        wetness=0.0,                   #totul uscat
         sun_azimuth_angle=0.0
     ),
     "INNORAT": carla.WeatherParameters(
         sun_altitude_angle=50.0,
-        cloudiness=80.0,               # cer foarte innorat
+        cloudiness=80.0,               #cer innorat
         precipitation=0.0,
         precipitation_deposits=0.0,
         wind_intensity=30.0,
@@ -52,19 +52,19 @@ WEATHER_PRESETS = {
     "PLOAIE_USOARA": carla.WeatherParameters(
         sun_altitude_angle=40.0,
         cloudiness=70.0,
-        precipitation=30.0,            # ploaie usoara
-        precipitation_deposits=30.0,   # asfalt partial ud
+        precipitation=30.0,            #ploaie usoara
+        precipitation_deposits=30.0,   #asfalt partial ud
         wind_intensity=40.0,
         fog_density=5.0,
         fog_distance=0.0,
-        wetness=40.0,                  # suprafete ude
+        wetness=40.0,                  #suprafete ude
         sun_azimuth_angle=180.0
     ),
     "PLOAIE_PUTERNICA": carla.WeatherParameters(
         sun_altitude_angle=30.0,
         cloudiness=90.0,
-        precipitation=70.0,            # ploaie puternica
-        precipitation_deposits=70.0,   # asfalt foarte ud, reflectii
+        precipitation=70.0,            #ploaie puternica
+        precipitation_deposits=70.0,   #asfalt ud, multe balti
         wind_intensity=70.0,
         fog_density=10.0,
         fog_distance=0.0,
@@ -77,13 +77,13 @@ WEATHER_PRESETS = {
         precipitation=0.0,
         precipitation_deposits=0.0,
         wind_intensity=5.0,
-        fog_density=40.0,              # ceata moderata
-        fog_distance=30.0,             # vizibilitate redusa
+        fog_density=40.0,              #ceata
+        fog_distance=30.0,             #vizibilitate redusa
         wetness=20.0,
         sun_azimuth_angle=45.0
     ),
     "APUS": carla.WeatherParameters(
-        sun_altitude_angle=10.0,       # soare la orizont
+        sun_altitude_angle=10.0,       #lumina orizont
         cloudiness=20.0,
         precipitation=0.0,
         precipitation_deposits=0.0,
@@ -91,7 +91,7 @@ WEATHER_PRESETS = {
         fog_density=5.0,
         fog_distance=0.0,
         wetness=0.0,
-        sun_azimuth_angle=220.0        # lumina din lateral
+        sun_azimuth_angle=220.0        #lumina din lateral
     ),
 }
 
@@ -200,7 +200,7 @@ def main():
     spawn_traffic(world, client, num_vehicles=25)
     time.sleep(2.0) 
 
-    # === Setare vreme initiala ===
+    #vreme defaukt
     current_weather_idx = 0
     world.set_weather(WEATHER_PRESETS[WEATHER_NAMES[current_weather_idx]])
     print(f"[VREME] {WEATHER_NAMES[current_weather_idx]}")
@@ -254,13 +254,13 @@ def main():
             
             if keys[K_ESCAPE]: break
 
-            # Toggle autopilot/manual cu M
+            #autopilot/manual cu M
             if keys[K_m] and not m_pressed_last_frame:
                 autopilot_enabled = not autopilot_enabled
                 print(f"\n>>> MOD CONDUS: {'AUTOPILOT' if autopilot_enabled else 'MANUAL (WASD)'} <<<")
             m_pressed_last_frame = keys[K_m]
 
-            # === Schimba vremea cu N ===
+            #change weather cu N
             if keys[K_n] and not n_pressed_last_frame:
                 current_weather_idx = (current_weather_idx + 1) % len(WEATHER_NAMES)
                 weather_name = WEATHER_NAMES[current_weather_idx]
@@ -320,7 +320,7 @@ def main():
             text_2 = font.render(f"GPS: {cmd_str} | S: {control_to_apply.steer:.2f} | T: {control_to_apply.throttle:.2f} | B: {control_to_apply.brake:.2f}", True, (255,255,255))
             text_3 = font.render(f"[M] Manual | [SPACE] Record | [N] Vreme", True, (150,150,150))
             
-            # Culoare diferita pentru fiecare tip de vreme
+            #culori
             weather_colors = {
                 "ZI_SENINA": (255, 255, 0),
                 "INNORAT": (180, 180, 180),

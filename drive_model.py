@@ -261,7 +261,7 @@ def main():
                     print("[HEATMAP] Fereastra inchisa.")
             m_pressed_last_frame = keys[K_m]
 
-            # Schimba stratu cu tastele 1-5
+            #change layer 1-5
             for key, layer_num in [(K_1, 1), (K_2, 2), (K_3, 3), (K_4, 4), (K_5, 5)]:
                 if keys[key] and active_layer != layer_num:
                     active_layer = layer_num

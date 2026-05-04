@@ -1,6 +1,7 @@
 import os
 import csv
 import random
+from datetime import datetime
 from PIL import Image
 import torch
 import torch.nn as nn
@@ -12,7 +13,8 @@ import torch.nn.functional as F
 
 DATASET_DIR = "dataset_traffic_processed"  
 MODEL_SAVE_PATH = "model_nav_traffic.pth"  
-GRAPH_SAVE_PATH = "training_history.png" 
+GRAPH_SAVE_PATH = "training_history.png"
+EXPERIMENT_LOG = "experiment_log.csv"
 
 BATCH_SIZE = 64 
 NUM_EPOCHS = 40          
@@ -133,6 +135,24 @@ def train():
     print(f" [V] ANTRENARE PE: {torch.cuda.get_device_name(0) if DEVICE == 'cuda' else 'CPU'}")
     print("="*50 + "\n")
     
+    #nitializare experiment log
+    if not os.path.exists(EXPERIMENT_LOG):
+        header = ["timestamp", "model", "dataset_size", "epochs", "best_epoch",
+                  "learning_rate", "best_val_loss", "final_train_loss", "notes"]
+        historical_data = [
+            ["2025-01-01 00:00", "CNN", "9485", "40", "~35",
+             "3e-4", "0.03700", "-", "Prima antrenare CNN, dataset initial"],
+            ["2025-01-15 00:00", "ViT (GPS concat)", "9485", "60", "44",
+             "1e-4", "0.05080", "-", "ViT v1 - GPS concatenat la final dupa transformer"],
+            ["2025-02-01 00:00", "ViT (GPS-as-Token)", "13000", "60", "60",
+             "1e-4", "0.05100", "-", "ViT v2 - GPS ca token in secventa transformer"],
+        ]
+        with open(EXPERIMENT_LOG, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(header)
+            writer.writerows(historical_data)
+        print(f"[LOG] Fisier {EXPERIMENT_LOG} creat cu {len(historical_data)} antrenari istorice.")
+
     dataset = CarlaNavDataset(DATASET_DIR)
     total_data = len(dataset)
     print(f" -> {total_data} imagini găsite.")
@@ -194,7 +214,7 @@ def train():
         
         scheduler.step(avg_val_loss)
         
-        # --- Salvăm datele pentru grafic ---
+        #date pt graf
         history_train_loss.append(avg_train_loss)
         history_val_loss.append(avg_val_loss)
 
@@ -223,6 +243,24 @@ def train():
     plt.grid(True, linestyle=':', alpha=0.7)
     plt.legend(fontsize=11)
     plt.show()
+
+    #salvare date in csv
+    best_epoch = history_val_loss.index(min(history_val_loss)) + 1
+    row = [
+        datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "CNN",
+        str(total_data),
+        str(NUM_EPOCHS),
+        str(best_epoch),
+        str(LEARNING_RATE),
+        f"{best_val_loss:.5f}",
+        f"{history_train_loss[-1]:.5f}",
+        f"NVIDIA CNN conditionat, MSE loss, Adam, ReduceLROnPlateau"
+    ]
+    with open(EXPERIMENT_LOG, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(row)
+    print(f"[LOG] Experiment CNN salvat in {EXPERIMENT_LOG}")
 
 if __name__ == "__main__":
     train()

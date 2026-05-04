@@ -10,7 +10,7 @@ from PIL import Image
 INPUT_DIR = "dataset_traffic"             
 OUTPUT_DIR = "dataset_traffic_processed"  
 SMOOTHING_WINDOW = 5  
-KEEP_PROBABILITY = 0.1 
+KEEP_PROBABILITY = 0.20 
 FLIP_PROBABILITY = 0.5 
 
 FINAL_W, FINAL_H = 200, 66
@@ -91,7 +91,7 @@ def main():
             command = int(row[4]) 
 
             
-            if abs(new_steer) < 0.05 and brake < 0.1:
+            if abs(new_steer) < 0.03 and brake < 0.1:
                 if random.random() > KEEP_PROBABILITY:
                     continue 
 
@@ -155,7 +155,7 @@ def main():
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     fig.suptitle("Analiza Dataset-ului Procesat pentru Trafic", fontsize=16, fontweight='bold')
 
-    #Grafic suprapunere Original vs Procesat
+    #grafic suprapunere original vs procesat
     axes[0, 0].hist(all_original_steer, bins=50, color='red', alpha=0.5, label='Original')
     axes[0, 0].hist(all_new_steer, bins=50, color='green', alpha=0.7, label='Procesat (Echilibrat)')
     axes[0, 0].set_title("1. Distribuția Volanului (Steer)")
@@ -163,19 +163,19 @@ def main():
     axes[0, 0].set_ylabel("Număr de Cadre")
     axes[0, 0].legend()
 
-    #Grafic Acceleratie
+    #grafic acceleratie
     axes[0, 1].hist(all_new_throttle, bins=20, color='blue', edgecolor='black', alpha=0.7)
     axes[0, 1].set_title("2. Accelerație (Throttle)")
     axes[0, 1].set_xlabel("Putere (0.0 Oprit, 1.0 Max)")
     axes[0, 1].set_ylabel("Număr de Cadre")
 
-    #Grafic Frana
+    #grafic frana
     axes[1, 0].hist(all_new_brake, bins=20, color='orange', edgecolor='black', alpha=0.7)
     axes[1, 0].set_title("3. Frânare (Brake)")
     axes[1, 0].set_xlabel("Putere Frână (0.0 Liber, 1.0 Max)")
     axes[1, 0].set_ylabel("Număr de Cadre")
 
-    #Grafic Comenzi GPS
+    #grafic comenzi GPS
     cmd_labels = ['LANE (0)', 'LEFT (1)', 'RIGHT (2)', 'STRAIGHT (3)']
     cmd_counts = [all_new_command.count(i) for i in range(4)]
     bars = axes[1, 1].bar(cmd_labels, cmd_counts, color=['gray', 'purple', 'cyan', 'magenta'], edgecolor='black')

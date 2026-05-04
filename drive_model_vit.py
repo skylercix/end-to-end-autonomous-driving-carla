@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 import queue
 import pygame
-from pygame.locals import K_ESCAPE, K_v, K_r, K_m, K_g, K_1, K_2, K_3, K_4
+from pygame.locals import K_ESCAPE, K_v, K_r, K_m, K_1, K_2, K_3, K_4
 import random
 import sys
 import glob
@@ -29,10 +29,39 @@ from agents.navigation.local_planner import RoadOption
 
 MODEL_PATH = "model_nav_traffic_vit.pth"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-STEERING_HISTORY_SIZE = 5
+STEERING_HISTORY_SIZE = 2
+BRAKE_HISTORY_SIZE = 8
+STEERING_SCALE_LEFT = 0.75   #reduce virajele la stanga (modelul prezice prea mult)
+STEERING_SCALE_RIGHT = 1.0   #virajele la dreapta raman nescalate
 
 
-# === VISION TRANSFORMER CU GPS CA TOKEN (identic cu train_vit.py) ===
+# === HYBRID VIT CU CONV STEM
+
+class ConvStem(nn.Module):
+    """
+    Mini-CNN care inlocuieste patch embedding-ul brut.
+    3x66x200 -> 48x33x100 -> 96x17x50 -> 128x9x25
+    Rezultat: 225 tokens cu features locale extrase.
+    """
+    def __init__(self, embed_dim=128):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 48, kernel_size=3, stride=2, padding=1)
+        self.bn1 = nn.BatchNorm2d(48)
+        
+        self.conv2 = nn.Conv2d(48, 96, kernel_size=3, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(96)
+        
+        self.conv3 = nn.Conv2d(96, embed_dim, kernel_size=3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(embed_dim)
+        
+        self.act = nn.ReLU()
+    
+    def forward(self, x):
+        x = self.act(self.bn1(self.conv1(x)))
+        x = self.act(self.bn2(self.conv2(x)))
+        x = self.act(self.bn3(self.conv3(x)))
+        return x
+
 
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim, num_heads, mlp_ratio=4, dropout=0.1):
@@ -59,23 +88,20 @@ class TransformerBlock(nn.Module):
 
 class ConditionalViTModel(nn.Module):
     """
-    Vision Transformer cu GPS injectat ca TOKEN.
-    Secventa: [CLS] [GPS] [patch_1] ... [patch_48] = 50 tokens
+    Hybrid ViT cu Conv Stem + GPS ca Token.
+    Conv Stem: 3 straturi CNN -> 225 patches cu features locale
+    Secventa: [CLS] [GPS] [patch_1] ... [patch_225] = 227 tokens
     """
-    def __init__(self, img_h=66, img_w=200, patch_h=11, patch_w=25,
+    def __init__(self, img_h=66, img_w=200,
                  embed_dim=128, num_heads=4, num_layers=4, mlp_ratio=4, dropout=0.1):
         super().__init__()
 
-        self.patch_h = patch_h
-        self.patch_w = patch_w
-        self.num_patches_h = img_h // patch_h
-        self.num_patches_w = img_w // patch_w
-        self.num_patches = self.num_patches_h * self.num_patches_w
         self.embed_dim = embed_dim
-
-        self.patch_embed = nn.Conv2d(3, embed_dim,
-                                     kernel_size=(patch_h, patch_w),
-                                     stride=(patch_h, patch_w))
+        self.conv_stem = ConvStem(embed_dim)
+        
+        self.num_patches_h = math.ceil(img_h / 8)   # 9
+        self.num_patches_w = math.ceil(img_w / 8)    # 25
+        self.num_patches = self.num_patches_h * self.num_patches_w  # 225
 
         self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02)
 
@@ -103,7 +129,7 @@ class ConditionalViTModel(nn.Module):
 
     def forward(self, img, cmd):
         B = img.shape[0]
-        x = self.patch_embed(img)
+        x = self.conv_stem(img)
         x = x.flatten(2).transpose(1, 2)
         cls = self.cls_token.expand(B, -1, -1)
         cmd_onehot = F.one_hot(cmd.long(), num_classes=4).float()
@@ -124,18 +150,6 @@ class ConditionalViTModel(nn.Module):
             return None
         cls_attn = block.attn_weights[0, 0, 2:]
         attn_map = cls_attn.reshape(self.num_patches_h, self.num_patches_w)
-        attn_map = attn_map - attn_map.min()
-        if attn_map.max() > 0:
-            attn_map = attn_map / attn_map.max()
-        return attn_map.detach().cpu().numpy()
-
-    def get_gps_attention(self, layer_idx=-1):
-        """Atentia GPS -> patches (unde se uita GPS-ul)."""
-        block = self.blocks[layer_idx]
-        if block.attn_weights is None:
-            return None
-        gps_attn = block.attn_weights[0, 1, 2:]
-        attn_map = gps_attn.reshape(self.num_patches_h, self.num_patches_w)
         attn_map = attn_map - attn_map.min()
         if attn_map.max() > 0:
             attn_map = attn_map / attn_map.max()
@@ -212,7 +226,7 @@ def carla_image_to_rgb(image):
 def main():
     pygame.init()
     display = pygame.display.set_mode((450, 430))
-    pygame.display.set_caption("AI Driving ViT (GPS-as-Token)")
+    pygame.display.set_caption("AI Driving Hybrid ViT (Conv Stem + GPS Token)")
     font = pygame.font.SysFont("Arial", 18)
 
     print("Se conecteaza la simulator...")
@@ -230,7 +244,8 @@ def main():
         try:
             model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
             model.eval()
-            print(f"\n[AI] Model ViT (GPS-as-Token) {MODEL_PATH} incarcat pe {DEVICE}!")
+            print(f"\n[AI] Model Hybrid ViT {MODEL_PATH} incarcat pe {DEVICE}!")
+            print(f"     Conv Stem: 3->48->96->128 | {model.num_patches} tokens + CLS + GPS")
         except Exception as e:
             print(f"\n[EROARE] Eroare la incarcare: {e}")
             return
@@ -277,20 +292,29 @@ def main():
     camera.listen(image_queue.put)
 
     steering_history = [0.0] * STEERING_HISTORY_SIZE
+    brake_history = [0.0] * BRAKE_HISTORY_SIZE
     follow_mode = True
     current_command = 0
 
     # --- ATTENTION MAP STATE ---
     show_attn = False
     m_pressed_last_frame = False
-    g_pressed_last_frame = False
     attn_fig = None
     attn_ax = None
     attn_im = None
     last_raw_image = None
     active_layer = 4
     smooth_attn = None
-    show_gps_attn = False  # False = CLS attention, True = GPS attention
+
+    # --- SMOOTH CAMERA ---
+    CAMERA_SMOOTH = 0.1
+    smooth_cam_x = None
+    smooth_cam_y = None
+    smooth_cam_z = None
+    smooth_cam_yaw = None
+
+    
+    last_control = carla.VehicleControl()
 
     try:
         while True:
@@ -304,22 +328,21 @@ def main():
                 follow_mode = not follow_mode
                 time.sleep(0.3)
 
-            # Toggle M — deschide/inchide fereastra attention map
+            # Toggle M — attention map
             if keys[K_m] and not m_pressed_last_frame:
                 show_attn = not show_attn
                 if show_attn:
                     plt.ion()
                     attn_fig, attn_ax = plt.subplots(1, 1, figsize=(8, 3))
-                    attn_fig.canvas.manager.set_window_title("LIVE Attention Map (ViT GPS-Token)")
-                    attn_type = "GPS Attention" if show_gps_attn else "CLS Attention"
-                    attn_ax.set_title(f"{attn_type} — Layer {active_layer}", fontsize=12)
+                    attn_fig.canvas.manager.set_window_title("LIVE Attention Map (Hybrid ViT)")
+                    attn_ax.set_title(f"CLS Attention — Layer {active_layer}", fontsize=12)
                     attn_ax.axis('off')
                     dummy = np.zeros((66, 200, 3), dtype=np.uint8)
                     attn_im = attn_ax.imshow(dummy)
                     plt.tight_layout()
                     plt.show(block=False)
                     smooth_attn = None
-                    print(f"[ATTN] Fereastra deschisa — Layer {active_layer}. [1-4] Strat | [G] CLS/GPS toggle")
+                    print(f"[ATTN] Fereastra deschisa — Layer {active_layer}. [1-4] Schimba strat")
                 else:
                     if attn_fig is not None:
                         plt.close(attn_fig)
@@ -330,24 +353,13 @@ def main():
                     print("[ATTN] Fereastra inchisa.")
             m_pressed_last_frame = keys[K_m]
 
-            # Toggle G — switch intre CLS attention si GPS attention
-            if keys[K_g] and not g_pressed_last_frame:
-                show_gps_attn = not show_gps_attn
-                smooth_attn = None  # reset EMA
-                attn_type = "GPS Attention" if show_gps_attn else "CLS Attention"
-                if show_attn and attn_ax is not None:
-                    attn_ax.set_title(f"{attn_type} — Layer {active_layer}", fontsize=12)
-                print(f"[ATTN] Mod schimbat -> {attn_type}")
-            g_pressed_last_frame = keys[K_g]
-
-            # Schimba stratul cu tastele 1-4
+            #layer change 1-4
             for key, layer_num in [(K_1, 1), (K_2, 2), (K_3, 3), (K_4, 4)]:
                 if keys[key] and active_layer != layer_num:
                     active_layer = layer_num
                     smooth_attn = None
                     if show_attn and attn_ax is not None:
-                        attn_type = "GPS Attention" if show_gps_attn else "CLS Attention"
-                        attn_ax.set_title(f"{attn_type} — Layer {active_layer}", fontsize=12)
+                        attn_ax.set_title(f"CLS Attention — Layer {active_layer}", fontsize=12)
                     print(f"[ATTN] Strat schimbat -> Layer {active_layer}")
                     time.sleep(0.2)
                     break
@@ -389,6 +401,9 @@ def main():
                     image_queue.get_nowait()
                 camera.listen(image_queue.put)
                 steering_history = [0.0] * STEERING_HISTORY_SIZE
+                brake_history = [0.0] * BRAKE_HISTORY_SIZE
+                last_control = carla.VehicleControl()
+                smooth_cam_x = None
                 print(f"[CARLA] Vehicul respawnat.")
                 continue
 
@@ -403,8 +418,6 @@ def main():
             auto_control = agent.run_step()
             current_road_option = agent.get_local_planner().target_road_option
             current_command = map_command(current_road_option)
-
-            control_to_apply = carla.VehicleControl()
 
             try:
                 last_image = None
@@ -425,36 +438,50 @@ def main():
                     steering_history.pop(0)
                     steering_history.append(raw_steer)
                     avg_steer = sum(steering_history) / len(steering_history)
-                    control_to_apply.steer = avg_steer
 
                     vel = vehicle.get_velocity()
                     current_speed = 3.6 * math.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
-
-                    if raw_brake > 0.2:
-                        control_to_apply.brake = max(0.4, min(1.0, raw_brake * 2.0))
-                        control_to_apply.throttle = 0.0
+                    
+                    #steering dependent de viteza: la viteza mare, reduce steering-ul
+                    speed_factor = max(0.5, 1.0 - current_speed * 0.012)
+                    scaled_steer = avg_steer * speed_factor
+                    
+                    #scalare asimetrica: stanga (negativ) se reduce, dreapta ramane
+                    if scaled_steer < 0:
+                        scaled_steer *= STEERING_SCALE_LEFT
                     else:
-                        control_to_apply.brake = 0.0
-                        target_speed = raw_throttle * 40.0
+                        scaled_steer *= STEERING_SCALE_RIGHT
+                    
+                    last_control.steer = max(-1.0, min(1.0, scaled_steer))
+
+                    brake_history.pop(0)
+                    brake_history.append(raw_brake)
+                    avg_brake = sum(brake_history) / len(brake_history)
+
+                    if avg_brake > 0.35:
+                        last_control.brake = max(0.4, min(1.0, avg_brake * 2.0))
+                        last_control.throttle = 0.0
+                    else:
+                        last_control.brake = 0.0
+                        if current_command in (1, 2):
+                            target_speed = raw_throttle * 25.0
+                        else:
+                            target_speed = raw_throttle * 40.0
                         speed_error = target_speed - current_speed
                         if speed_error > 0:
                             calc_throttle = speed_error * 0.15
-                            control_to_apply.throttle = max(0.25, min(0.75, calc_throttle))
+                            last_control.throttle = max(0.25, min(0.75, calc_throttle))
                         else:
-                            control_to_apply.throttle = 0.0
+                            #throttle minim — masina nu se opreste niciodata singura
+                            last_control.throttle = 0.2
 
-                    vehicle.apply_control(control_to_apply)
+                    vehicle.apply_control(last_control)
 
                     # --- ACTUALIZARE ATTENTION MAP LIVE ---
                     if show_attn and attn_fig is not None and last_raw_image is not None:
                         try:
                             rgb_frame = carla_image_to_rgb(last_raw_image)
-
-                            # Alege intre CLS attention si GPS attention
-                            if show_gps_attn:
-                                raw_attn = model.get_gps_attention(layer_idx=active_layer - 1)
-                            else:
-                                raw_attn = model.get_attention_maps(layer_idx=active_layer - 1)
+                            raw_attn = model.get_attention_maps(layer_idx=active_layer - 1)
 
                             if raw_attn is not None:
                                 if smooth_attn is None or smooth_attn.shape != raw_attn.shape:
@@ -485,13 +512,12 @@ def main():
             display.fill((0, 0, 0))
             cmd_str = ["LANE", "LEFT", "RIGHT", "STRAIGHT"][current_command]
 
-            text_1 = font.render(f"Driver: AI ViT (GPS-Token) | {MODEL_PATH}", True, (255, 255, 255))
-            text_2 = font.render(f"GPS: {cmd_str} | Steer: {control_to_apply.steer:.2f} | T: {control_to_apply.throttle:.2f} | B: {control_to_apply.brake:.2f}", True, (255, 255, 255))
+            text_1 = font.render(f"Driver: AI Hybrid ViT | {MODEL_PATH}", True, (255, 255, 255))
+            text_2 = font.render(f"GPS: {cmd_str} | Steer: {last_control.steer:.2f} | T: {last_control.throttle:.2f} | B: {last_control.brake:.2f}", True, (255, 255, 255))
             text_3 = font.render(f"[V] Camera | [R] Respawn | [M] Attention | [ESC] Exit", True, (150, 150, 150))
 
             if show_attn:
-                attn_type = "GPS" if show_gps_attn else "CLS"
-                attn_status = f"ATTN: {attn_type} | L{active_layer}/4 | [1-4] Strat | [G] Toggle"
+                attn_status = f"ATTN: ON | Layer {active_layer}/4 | [1-4] Schimba strat"
                 color_status = (0, 255, 0)
             else:
                 attn_status = "ATTENTION: OFF | [M] Deschide"
@@ -505,7 +531,7 @@ def main():
             display.blit(text_5, (10, 100))
             display.blit(text_4, (155, 140))
 
-            # Radar GPS 2D
+            #radar GPS 2D
             if vehicle.is_alive:
                 v_transform = vehicle.get_transform()
                 v_x = v_transform.location.x
@@ -536,9 +562,31 @@ def main():
 
             if follow_mode and vehicle.is_alive:
                 t = vehicle.get_transform()
+                #pozitia tinta a camerei (in spatele masinii)
+                target_loc = t.location - 6 * t.get_forward_vector() + carla.Location(z=3.0)
+                target_yaw = t.rotation.yaw
+
+                #prima iteratie: initializare directa
+                if smooth_cam_x is None:
+                    smooth_cam_x = target_loc.x
+                    smooth_cam_y = target_loc.y
+                    smooth_cam_z = target_loc.z
+                    smooth_cam_yaw = target_yaw
+                else:
+                    #lerp (interpolare liniara) pentru miscare lina
+                    smooth_cam_x += (target_loc.x - smooth_cam_x) * CAMERA_SMOOTH
+                    smooth_cam_y += (target_loc.y - smooth_cam_y) * CAMERA_SMOOTH
+                    smooth_cam_z += (target_loc.z - smooth_cam_z) * CAMERA_SMOOTH
+                    
+                    #lerp special pentru yaw (sa nu sara la trecerea 360->0)
+                    yaw_diff = target_yaw - smooth_cam_yaw
+                    if yaw_diff > 180: yaw_diff -= 360
+                    elif yaw_diff < -180: yaw_diff += 360
+                    smooth_cam_yaw += yaw_diff * CAMERA_SMOOTH
+
                 spectator.set_transform(carla.Transform(
-                    t.location - 6 * t.get_forward_vector() + carla.Location(z=3.0),
-                    carla.Rotation(pitch=-15.0, yaw=t.rotation.yaw)
+                    carla.Location(x=smooth_cam_x, y=smooth_cam_y, z=smooth_cam_z),
+                    carla.Rotation(pitch=-15.0, yaw=smooth_cam_yaw)
                 ))
 
             if show_attn and attn_fig is not None:
