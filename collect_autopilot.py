@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 import queue
 import pygame
-from pygame.locals import K_SPACE, K_ESCAPE, K_m, K_w, K_a, K_s, K_d
+from pygame.locals import K_SPACE, K_ESCAPE, K_m, K_w, K_a, K_s, K_d, K_n
 import random
 import sys
 import glob
@@ -23,6 +23,80 @@ from agents.navigation.local_planner import RoadOption
 
 ROOT_SAVE_FOLDER = "dataset_traffic" 
 os.makedirs(ROOT_SAVE_FOLDER, exist_ok=True)
+
+# === PRESET-URI DE VREME ===
+# Fiecare preset schimba dramatic aspectul vizual al aceleiasi strazi
+WEATHER_PRESETS = {
+    "ZI_SENINA": carla.WeatherParameters(
+        sun_altitude_angle=70.0,       # soare sus
+        cloudiness=10.0,               # cer senin
+        precipitation=0.0,             # fara ploaie
+        precipitation_deposits=0.0,    # asfalt uscat
+        wind_intensity=10.0,
+        fog_density=0.0,               # fara ceata
+        fog_distance=0.0,
+        wetness=0.0,                   # totul uscat
+        sun_azimuth_angle=0.0
+    ),
+    "INNORAT": carla.WeatherParameters(
+        sun_altitude_angle=50.0,
+        cloudiness=80.0,               # cer foarte innorat
+        precipitation=0.0,
+        precipitation_deposits=0.0,
+        wind_intensity=30.0,
+        fog_density=0.0,
+        fog_distance=0.0,
+        wetness=0.0,
+        sun_azimuth_angle=90.0
+    ),
+    "PLOAIE_USOARA": carla.WeatherParameters(
+        sun_altitude_angle=40.0,
+        cloudiness=70.0,
+        precipitation=30.0,            # ploaie usoara
+        precipitation_deposits=30.0,   # asfalt partial ud
+        wind_intensity=40.0,
+        fog_density=5.0,
+        fog_distance=0.0,
+        wetness=40.0,                  # suprafete ude
+        sun_azimuth_angle=180.0
+    ),
+    "PLOAIE_PUTERNICA": carla.WeatherParameters(
+        sun_altitude_angle=30.0,
+        cloudiness=90.0,
+        precipitation=70.0,            # ploaie puternica
+        precipitation_deposits=70.0,   # asfalt foarte ud, reflectii
+        wind_intensity=70.0,
+        fog_density=10.0,
+        fog_distance=0.0,
+        wetness=80.0,
+        sun_azimuth_angle=270.0
+    ),
+    "CEATA": carla.WeatherParameters(
+        sun_altitude_angle=45.0,
+        cloudiness=50.0,
+        precipitation=0.0,
+        precipitation_deposits=0.0,
+        wind_intensity=5.0,
+        fog_density=40.0,              # ceata moderata
+        fog_distance=30.0,             # vizibilitate redusa
+        wetness=20.0,
+        sun_azimuth_angle=45.0
+    ),
+    "APUS": carla.WeatherParameters(
+        sun_altitude_angle=10.0,       # soare la orizont
+        cloudiness=20.0,
+        precipitation=0.0,
+        precipitation_deposits=0.0,
+        wind_intensity=10.0,
+        fog_density=5.0,
+        fog_distance=0.0,
+        wetness=0.0,
+        sun_azimuth_angle=220.0        # lumina din lateral
+    ),
+}
+
+WEATHER_NAMES = list(WEATHER_PRESETS.keys())
+
 
 def map_command(road_option):
     if road_option == RoadOption.LEFT: return 1
@@ -59,7 +133,6 @@ def save_image(image, control, command, episode_path, buffer_controls):
     pil_image = Image.fromarray(array)
     filename = f"{image.frame}.png"
     pil_image.save(os.path.join(episode_path, filename))
-    #VOLAN, ACCELERATIE, FRANA,COMANDA GPS
     buffer_controls.append([filename, control.steer, control.throttle, control.brake, command])
 
 def save_csv(episode_path, buffer_controls):
@@ -74,14 +147,13 @@ def save_csv(episode_path, buffer_controls):
         writer.writerows(buffer_controls)
     print(f" Salvat: {os.path.basename(episode_path)} | {len(buffer_controls)} imagini.")
 
-#Trafic - versiune imbunatatita cu dinamica mai realista
 def spawn_traffic(world, client, num_vehicles=25):
     blueprint_library = world.get_blueprint_library()
     spawn_points = world.get_map().get_spawn_points()
     
     traffic_manager = client.get_trafficmanager(8000)
-    traffic_manager.set_global_distance_to_leading_vehicle(1.5)       # distanta mai mica intre masini
-    traffic_manager.global_percentage_speed_difference(-20)            # conduc cu 20% peste limita (mai agresive)
+    traffic_manager.set_global_distance_to_leading_vehicle(1.5)
+    traffic_manager.global_percentage_speed_difference(-20)
     traffic_manager.set_synchronous_mode(False)
     
     spawned_vehicles = []
@@ -96,21 +168,20 @@ def spawn_traffic(world, client, num_vehicles=25):
             if npc is not None:
                 npc.set_autopilot(True)
                 
-                # Fiecare NPC are comportament diferit
-                traffic_manager.ignore_lights_percentage(npc, 30)                          # 30% ignora semafoare
-                traffic_manager.ignore_walkers_percentage(npc, 0)                           # nu ignora pietoni
-                traffic_manager.vehicle_percentage_speed_difference(npc, random.uniform(-30, 10))  # viteze variate: -30=rapid, +10=lent
-                traffic_manager.distance_to_leading_vehicle(npc, random.uniform(1.0, 3.0))         # distante variate
+                traffic_manager.ignore_lights_percentage(npc, 30)
+                traffic_manager.ignore_walkers_percentage(npc, 0)
+                traffic_manager.vehicle_percentage_speed_difference(npc, random.uniform(-30, 10))
+                traffic_manager.distance_to_leading_vehicle(npc, random.uniform(1.0, 3.0))
                 
                 spawned_vehicles.append(npc)
                 
-    print(f"{len(spawned_vehicles)} vehicule in trafic (dinamica imbunatatita).")
+    print(f"{len(spawned_vehicles)} vehicule in trafic.")
     return spawned_vehicles
 
 def main():
     pygame.init()
-    display = pygame.display.set_mode((450, 400))
-    pygame.display.set_caption("Colectare cu Trafic | SPACE=Rec | M=Manual")
+    display = pygame.display.set_mode((450, 430))
+    pygame.display.set_caption("Colectare cu Trafic + Vreme | SPACE=Rec | N=Vreme")
     font = pygame.font.SysFont("Arial", 18)
 
     print("Se conecteaza la simulator...")
@@ -126,14 +197,16 @@ def main():
     blueprint_library = world.get_blueprint_library()
     spawn_points = world.get_map().get_spawn_points()
 
-    
     spawn_traffic(world, client, num_vehicles=25)
     time.sleep(2.0) 
 
-    
+    # === Setare vreme initiala ===
+    current_weather_idx = 0
+    world.set_weather(WEATHER_PRESETS[WEATHER_NAMES[current_weather_idx]])
+    print(f"[VREME] {WEATHER_NAMES[current_weather_idx]}")
+
     vehicle_bp = blueprint_library.filter("model3")[0]
     spawn_point = random.choice(spawn_points)
-    
     
     vehicle = None
     while vehicle is None:
@@ -141,18 +214,15 @@ def main():
         vehicle = world.try_spawn_actor(vehicle_bp, spawn_point)
     time.sleep(1.0)
 
-    
     agent = BasicAgent(vehicle, target_speed=20)
     agent.ignore_traffic_lights(active=True)
     agent.ignore_stop_signs(active=True)
-    
     
     current_wp = world.get_map().get_waypoint(vehicle.get_location())
     next_wps = current_wp.next(100.0)
     if next_wps: agent.set_destination(next_wps[0].transform.location)
     else: agent.set_destination(random.choice(spawn_points).location)
 
-    
     camera_bp = blueprint_library.find("sensor.camera.rgb")
     camera_bp.set_attribute("image_size_x", "320")
     camera_bp.set_attribute("image_size_y", "240")
@@ -167,13 +237,13 @@ def main():
     spectator = world.get_spectator()
     clock = pygame.time.Clock()
 
-    
     is_recording = False
     current_episode_path = None
     buffer_controls = [] 
     
     autopilot_enabled = True
     m_pressed_last_frame = False
+    n_pressed_last_frame = False
     manual_steer = 0.0 
 
     try:
@@ -184,13 +254,20 @@ def main():
             
             if keys[K_ESCAPE]: break
 
-            
+            # Toggle autopilot/manual cu M
             if keys[K_m] and not m_pressed_last_frame:
                 autopilot_enabled = not autopilot_enabled
                 print(f"\n>>> MOD CONDUS: {'AUTOPILOT' if autopilot_enabled else 'MANUAL (WASD)'} <<<")
             m_pressed_last_frame = keys[K_m]
 
-            
+            # === Schimba vremea cu N ===
+            if keys[K_n] and not n_pressed_last_frame:
+                current_weather_idx = (current_weather_idx + 1) % len(WEATHER_NAMES)
+                weather_name = WEATHER_NAMES[current_weather_idx]
+                world.set_weather(WEATHER_PRESETS[weather_name])
+                print(f"\n[VREME] Schimbat -> {weather_name}")
+            n_pressed_last_frame = keys[K_n]
+
             if agent.done():
                 current_loc = vehicle.get_location()
                 new_dest = random.choice(spawn_points)
@@ -202,7 +279,6 @@ def main():
             current_road_option = agent.get_local_planner().target_road_option
             current_command = map_command(current_road_option)
 
-            
             if autopilot_enabled:
                 control_to_apply = auto_control
                 manual_steer = auto_control.steer 
@@ -222,7 +298,6 @@ def main():
 
             vehicle.apply_control(control_to_apply)
 
-            
             if keys[K_SPACE] and not is_recording:
                 is_recording = True
                 current_episode_path = get_next_episode_path(ROOT_SAVE_FOLDER)
@@ -233,23 +308,37 @@ def main():
                 is_recording = False
                 save_csv(current_episode_path, buffer_controls)
 
-            
+            # === DISPLAY PYGAME ===
             bg_color = (200, 0, 0) if is_recording else (0, 0, 0)
             display.fill(bg_color)
             
             driver_str = "AUTO" if autopilot_enabled else "MANUAL"
             cmd_str = ["LANE", "LEFT", "RIGHT", "STRAIGHT"][current_command]
-            
+            weather_str = WEATHER_NAMES[current_weather_idx]
             
             text_1 = font.render(f"Driver: {driver_str} | REC: {'DA' if is_recording else 'NU'}", True, (255,255,255))
             text_2 = font.render(f"GPS: {cmd_str} | S: {control_to_apply.steer:.2f} | T: {control_to_apply.throttle:.2f} | B: {control_to_apply.brake:.2f}", True, (255,255,255))
-            text_3 = font.render(f"[M] Toggle Manual | [SPACE] Hold to Record", True, (150,150,150))
-            text_4 = font.render(f"RADAR GPS (2D) \/", True, (255, 255, 0))
+            text_3 = font.render(f"[M] Manual | [SPACE] Record | [N] Vreme", True, (150,150,150))
+            
+            # Culoare diferita pentru fiecare tip de vreme
+            weather_colors = {
+                "ZI_SENINA": (255, 255, 0),
+                "INNORAT": (180, 180, 180),
+                "PLOAIE_USOARA": (100, 150, 255),
+                "PLOAIE_PUTERNICA": (50, 80, 200),
+                "CEATA": (200, 200, 200),
+                "APUS": (255, 150, 50),
+            }
+            w_color = weather_colors.get(weather_str, (255, 255, 255))
+            text_4 = font.render(f"VREME: {weather_str} | [N] Schimba", True, w_color)
+            
+            text_5 = font.render(f"RADAR GPS (2D) \/", True, (255, 255, 0))
             
             display.blit(text_1, (10, 10))
             display.blit(text_2, (10, 40))
             display.blit(text_3, (10, 70))
-            display.blit(text_4, (155, 120))
+            display.blit(text_4, (10, 100))
+            display.blit(text_5, (155, 140))
 
             if vehicle.is_alive:
                 v_transform = vehicle.get_transform()
@@ -258,7 +347,7 @@ def main():
                 v_yaw = math.radians(v_transform.rotation.yaw)
                 
                 route_trace = list(agent.get_local_planner()._waypoints_queue)
-                radar_center_x, radar_center_y = 225, 350
+                radar_center_x, radar_center_y = 225, 370
                 pygame.draw.circle(display, (0, 150, 255), (radar_center_x, radar_center_y), 6)
 
                 for wp, _ in route_trace:
@@ -275,7 +364,7 @@ def main():
                         scale = 4  
                         screen_x = int(radar_center_x + rel_y * scale)
                         screen_y = int(radar_center_y - rel_x * scale) 
-                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 400:
+                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 430:
                             pygame.draw.circle(display, (0, 255, 0), (screen_x, screen_y), 3)
 
             pygame.display.flip()
@@ -291,13 +380,12 @@ def main():
                 last_image = None
                 while not image_queue.empty(): last_image = image_queue.get_nowait()
                 
-                
                 if is_recording and last_image is not None:
                     save_image(last_image, control_to_apply, current_command, current_episode_path, buffer_controls)
             except queue.Empty: pass
 
     finally:
-        print("\n[OPRIRE] Se opresc senzorii și se curata traficul...")
+        print("\n[OPRIRE] Se opresc senzorii si se curata traficul...")
         if is_recording and buffer_controls:
             save_csv(current_episode_path, buffer_controls)
         if 'camera' in locals() and camera is not None:
