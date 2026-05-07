@@ -4,3 +4,7 @@ timestamp,model,dataset_size,epochs,best_epoch,learning_rate,best_val_loss,final
 2025-02-01 00:00,ViT (GPS-as-Token),13000,60,60,1e-4,0.05100,-,ViT v2 - GPS ca token in secventa transformer
 2026-05-04 13:37,CNN,13451,40,27,0.0003,0.03575,0.02835,"NVIDIA CNN conditionat, MSE loss, Adam, ReduceLROnPlateau"
 2026-05-04 17:21,ViT Hybrid (Conv Stem + GPS Token),13451,60,51,0.0001,0.04446,0.04242,"Conv Stem 3->48->96->128, 225 tokens, weighted loss s=3.0 t=1.0 b=1.0, aug: ColorJitter+Affine+Erasing"
+2026-05-04 23:10,ViT Hybrid (Conv Stem + GPS Token),20648,60,36,0.0001,0.03853,0.03695,"Conv Stem 3->48->96->128, 225 tokens, weighted loss s=2.0 t=1.0 b=1.0, aug: ColorJitter+Affine+Erasing"
+2026-05-05 20:20,ViT Hybrid (Conv Stem + GPS Token),23808,60,47,0.0001,0.03735,0.03604,"Conv Stem 3->48->96->128, 225 tokens, weighted loss s=2.0 t=1.0 b=1.0, aug: ColorJitter+Affine+Erasing"
+2026-05-06 18:22,ViT Hybrid (Conv Stem + GPS Token),27018,60,55,0.0001,0.03546,0.03581,"Conv Stem 3->48->96->128, 225 tokens, weighted loss s=2.0 t=1.0 b=1.0, aug: ColorJitter+Affine+Erasing"
+2026-05-07 13:42,CNN,27018,40,20,0.0003,0.03420,0.02750,"NVIDIA CNN conditionat, MSE loss, Adam, ReduceLROnPlateau"

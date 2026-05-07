@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 import queue
 import pygame
-from pygame.locals import K_ESCAPE, K_v, K_r, K_m, K_1, K_2, K_3, K_4, K_5
+from pygame.locals import K_ESCAPE, K_v, K_r, K_m, K_n, K_1, K_2, K_3, K_4, K_5
 import random
 import sys
 import glob
@@ -30,6 +30,41 @@ from agents.navigation.local_planner import RoadOption
 MODEL_PATH = "model_nav_traffic.pth" 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 STEERING_HISTORY_SIZE = 2 
+
+# === PRESETURI DE VREME ===
+WEATHER_PRESETS = {
+    "ZI_SENINA": carla.WeatherParameters(
+        sun_altitude_angle=70.0, cloudiness=10.0, precipitation=0.0,
+        precipitation_deposits=0.0, wind_intensity=10.0,
+        fog_density=0.0, fog_distance=0.0, wetness=0.0, sun_azimuth_angle=0.0
+    ),
+    "INNORAT": carla.WeatherParameters(
+        sun_altitude_angle=50.0, cloudiness=80.0, precipitation=0.0,
+        precipitation_deposits=0.0, wind_intensity=30.0,
+        fog_density=0.0, fog_distance=0.0, wetness=0.0, sun_azimuth_angle=90.0
+    ),
+    "PLOAIE_USOARA": carla.WeatherParameters(
+        sun_altitude_angle=40.0, cloudiness=70.0, precipitation=30.0,
+        precipitation_deposits=30.0, wind_intensity=40.0,
+        fog_density=5.0, fog_distance=0.0, wetness=40.0, sun_azimuth_angle=180.0
+    ),
+    "PLOAIE_PUTERNICA": carla.WeatherParameters(
+        sun_altitude_angle=30.0, cloudiness=90.0, precipitation=70.0,
+        precipitation_deposits=70.0, wind_intensity=70.0,
+        fog_density=10.0, fog_distance=0.0, wetness=80.0, sun_azimuth_angle=270.0
+    ),
+    "CEATA": carla.WeatherParameters(
+        sun_altitude_angle=45.0, cloudiness=50.0, precipitation=0.0,
+        precipitation_deposits=0.0, wind_intensity=5.0,
+        fog_density=40.0, fog_distance=30.0, wetness=20.0, sun_azimuth_angle=45.0
+    ),
+    "APUS": carla.WeatherParameters(
+        sun_altitude_angle=10.0, cloudiness=20.0, precipitation=0.0,
+        precipitation_deposits=0.0, wind_intensity=10.0,
+        fog_density=5.0, fog_distance=0.0, wetness=0.0, sun_azimuth_angle=220.0
+    ),
+}
+WEATHER_NAMES = list(WEATHER_PRESETS.keys())
 
 # --- HOOK PENTRU FEATURE MAPS ---
 activation = {}
@@ -139,7 +174,7 @@ def carla_image_to_rgb(image):
 
 def main():
     pygame.init()
-    display = pygame.display.set_mode((450, 400))
+    display = pygame.display.set_mode((450, 430))
     pygame.display.set_caption("AI Driving | Trafic Inclus")
     font = pygame.font.SysFont("Arial", 18)
 
@@ -180,6 +215,12 @@ def main():
     
     spawn_traffic(world, client, num_vehicles=30)
     time.sleep(2.0)
+
+    # Vreme default
+    current_weather_idx = 0
+    n_pressed_last_frame = False
+    world.set_weather(WEATHER_PRESETS[WEATHER_NAMES[current_weather_idx]])
+    print(f"[VREME] {WEATHER_NAMES[current_weather_idx]}")
 
     
     vehicle_bp = blueprint_library.filter("model3")[0]
@@ -237,6 +278,14 @@ def main():
             if keys[K_v]:
                 follow_mode = not follow_mode
                 time.sleep(0.3)
+
+            # Schimbare vreme cu N
+            if keys[K_n] and not n_pressed_last_frame:
+                current_weather_idx = (current_weather_idx + 1) % len(WEATHER_NAMES)
+                weather_name = WEATHER_NAMES[current_weather_idx]
+                world.set_weather(WEATHER_PRESETS[weather_name])
+                print(f"[VREME] Schimbat -> {weather_name}")
+            n_pressed_last_frame = keys[K_n]
 
             # Toggle M
             if keys[K_m] and not m_pressed_last_frame:
@@ -405,7 +454,6 @@ def main():
             text_1 = font.render(f"Driver: AI | Model: {MODEL_PATH}", True, (255,255,255))
             text_2 = font.render(f"GPS: {cmd_str} | Steer: {control_to_apply.steer:.2f} | T: {control_to_apply.throttle:.2f} | B: {control_to_apply.brake:.2f}", True, (255,255,255))
             text_3 = font.render(f"[V] Camera | [R] Respawn | [M] Heatmap | [ESC] Exit", True, (150,150,150))
-            text_4 = font.render(f"RADAR GPS (2D) \/", True, (255, 255, 0))
             
             if show_heatmap:
                 heatmap_status = f"HEATMAP: ON | Conv{active_layer} | [1-5] Schimba strat"
@@ -415,11 +463,23 @@ def main():
                 color_status = (150, 150, 150)
             text_5 = font.render(heatmap_status, True, color_status)
 
+            weather_str = WEATHER_NAMES[current_weather_idx]
+            weather_colors = {
+                "ZI_SENINA": (255, 255, 0), "INNORAT": (180, 180, 180),
+                "PLOAIE_USOARA": (100, 150, 255), "PLOAIE_PUTERNICA": (50, 80, 200),
+                "CEATA": (200, 200, 200), "APUS": (255, 150, 50),
+            }
+            w_color = weather_colors.get(weather_str, (255, 255, 255))
+            text_6 = font.render(f"VREME: {weather_str} | [N] Schimba", True, w_color)
+
+            text_4 = font.render(f"RADAR GPS (2D) \/", True, (255, 255, 0))
+
             display.blit(text_1, (10, 10))
             display.blit(text_2, (10, 40))
             display.blit(text_3, (10, 70))
             display.blit(text_5, (10, 100))
-            display.blit(text_4, (155, 130))
+            display.blit(text_6, (10, 130))
+            display.blit(text_4, (155, 160))
 
             if vehicle.is_alive:
                 v_transform = vehicle.get_transform()
@@ -429,7 +489,7 @@ def main():
 
                 route_trace = list(agent.get_local_planner()._waypoints_queue)
 
-                radar_center_x, radar_center_y = 225, 350
+                radar_center_x, radar_center_y = 225, 370
                 pygame.draw.circle(display, (0, 150, 255), (radar_center_x, radar_center_y), 6)
 
                 for wp, _ in route_trace:
@@ -444,7 +504,7 @@ def main():
                         scale = 4
                         screen_x = int(radar_center_x + rel_y * scale)
                         screen_y = int(radar_center_y - rel_x * scale)
-                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 400:
+                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 430:
                             pygame.draw.circle(display, (0, 255, 0), (screen_x, screen_y), 3)
 
             pygame.display.flip()

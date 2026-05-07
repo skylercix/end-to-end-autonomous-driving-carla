@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 import queue
 import pygame
-from pygame.locals import K_ESCAPE, K_v, K_r, K_m, K_1, K_2, K_3, K_4
+from pygame.locals import K_ESCAPE, K_v, K_r, K_m, K_n, K_1, K_2, K_3, K_4
 import random
 import sys
 import glob
@@ -30,9 +30,52 @@ from agents.navigation.local_planner import RoadOption
 MODEL_PATH = "model_nav_traffic_vit.pth"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 STEERING_HISTORY_SIZE = 2
-BRAKE_HISTORY_SIZE = 8
-STEERING_SCALE_LEFT = 0.75   #reduce virajele la stanga (modelul prezice prea mult)
-STEERING_SCALE_RIGHT = 1.0   #virajele la dreapta raman nescalate
+BRAKE_HISTORY_SIZE = 5        # redus de la 8 — reactie mai rapida la frana
+
+# === SISTEM INTELIGENT DE STEERING BAZAT PE VITEZA ===
+# Adaptat la vitezele reale din Town01 (15-25 km/h de obicei)
+# Sub SPEED_STEER_FREE: steering 1:1 (viraje stranse la intersectii, manevre)
+# Intre FREE si MAX: reducere liniara (stabilitate pe drum drept)
+# Peste MAX: factor minim
+SPEED_STEER_FREE = 15.0       # km/h — sub viteza asta, zero dampening  
+SPEED_STEER_MAX = 30.0        # km/h — la viteza asta, dampening maxim
+SPEED_STEER_MIN_FACTOR = 0.55 # factorul minim la viteza mare
+MAX_STEER_CHANGE = 0.05       # cat de mult se poate schimba steering-ul per frame
+
+# === PRESETURI DE VREME ===
+WEATHER_PRESETS = {
+    "ZI_SENINA": carla.WeatherParameters(
+        sun_altitude_angle=70.0, cloudiness=10.0, precipitation=0.0,
+        precipitation_deposits=0.0, wind_intensity=10.0,
+        fog_density=0.0, fog_distance=0.0, wetness=0.0, sun_azimuth_angle=0.0
+    ),
+    "INNORAT": carla.WeatherParameters(
+        sun_altitude_angle=50.0, cloudiness=80.0, precipitation=0.0,
+        precipitation_deposits=0.0, wind_intensity=30.0,
+        fog_density=0.0, fog_distance=0.0, wetness=0.0, sun_azimuth_angle=90.0
+    ),
+    "PLOAIE_USOARA": carla.WeatherParameters(
+        sun_altitude_angle=40.0, cloudiness=70.0, precipitation=30.0,
+        precipitation_deposits=30.0, wind_intensity=40.0,
+        fog_density=5.0, fog_distance=0.0, wetness=40.0, sun_azimuth_angle=180.0
+    ),
+    "PLOAIE_PUTERNICA": carla.WeatherParameters(
+        sun_altitude_angle=30.0, cloudiness=90.0, precipitation=70.0,
+        precipitation_deposits=70.0, wind_intensity=70.0,
+        fog_density=10.0, fog_distance=0.0, wetness=80.0, sun_azimuth_angle=270.0
+    ),
+    "CEATA": carla.WeatherParameters(
+        sun_altitude_angle=45.0, cloudiness=50.0, precipitation=0.0,
+        precipitation_deposits=0.0, wind_intensity=5.0,
+        fog_density=40.0, fog_distance=30.0, wetness=20.0, sun_azimuth_angle=45.0
+    ),
+    "APUS": carla.WeatherParameters(
+        sun_altitude_angle=10.0, cloudiness=20.0, precipitation=0.0,
+        precipitation_deposits=0.0, wind_intensity=10.0,
+        fog_density=5.0, fog_distance=0.0, wetness=0.0, sun_azimuth_angle=220.0
+    ),
+}
+WEATHER_NAMES = list(WEATHER_PRESETS.keys())
 
 
 # === HYBRID VIT CU CONV STEM
@@ -225,7 +268,7 @@ def carla_image_to_rgb(image):
 
 def main():
     pygame.init()
-    display = pygame.display.set_mode((450, 430))
+    display = pygame.display.set_mode((450, 490))
     pygame.display.set_caption("AI Driving Hybrid ViT (Conv Stem + GPS Token)")
     font = pygame.font.SysFont("Arial", 18)
 
@@ -261,6 +304,12 @@ def main():
 
     spawn_traffic(world, client, num_vehicles=30)
     time.sleep(2.0)
+
+    # Vreme default
+    current_weather_idx = 0
+    n_pressed_last_frame = False
+    world.set_weather(WEATHER_PRESETS[WEATHER_NAMES[current_weather_idx]])
+    print(f"[VREME] {WEATHER_NAMES[current_weather_idx]}")
 
     vehicle_bp = blueprint_library.filter("model3")[0]
     vehicle = None
@@ -315,6 +364,8 @@ def main():
 
     
     last_control = carla.VehicleControl()
+    display_speed = 0.0
+    display_speed_factor = 1.0
 
     try:
         while True:
@@ -327,6 +378,14 @@ def main():
             if keys[K_v]:
                 follow_mode = not follow_mode
                 time.sleep(0.3)
+
+            # Schimbare vreme cu N
+            if keys[K_n] and not n_pressed_last_frame:
+                current_weather_idx = (current_weather_idx + 1) % len(WEATHER_NAMES)
+                weather_name = WEATHER_NAMES[current_weather_idx]
+                world.set_weather(WEATHER_PRESETS[weather_name])
+                print(f"[VREME] Schimbat -> {weather_name}")
+            n_pressed_last_frame = keys[K_n]
 
             # Toggle M — attention map
             if keys[K_m] and not m_pressed_last_frame:
@@ -442,38 +501,56 @@ def main():
                     vel = vehicle.get_velocity()
                     current_speed = 3.6 * math.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
                     
-                    #steering dependent de viteza: la viteza mare, reduce steering-ul
-                    speed_factor = max(0.5, 1.0 - current_speed * 0.012)
-                    scaled_steer = avg_steer * speed_factor
-                    
-                    #scalare asimetrica: stanga (negativ) se reduce, dreapta ramane
-                    if scaled_steer < 0:
-                        scaled_steer *= STEERING_SCALE_LEFT
+                    # === STEERING INTELIGENT BAZAT PE VITEZA ===
+                    # Sub SPEED_STEER_FREE: factor = 1.0 (modelul decide complet)
+                    # Intre FREE si MAX: reducere liniara (stabilitate pe drum drept)
+                    # Peste MAX: factor minim
+                    if current_speed < SPEED_STEER_FREE:
+                        speed_factor = 1.0
+                    elif current_speed > SPEED_STEER_MAX:
+                        speed_factor = SPEED_STEER_MIN_FACTOR
                     else:
-                        scaled_steer *= STEERING_SCALE_RIGHT
+                        t = (current_speed - SPEED_STEER_FREE) / (SPEED_STEER_MAX - SPEED_STEER_FREE)
+                        speed_factor = 1.0 - t * (1.0 - SPEED_STEER_MIN_FACTOR)
                     
-                    last_control.steer = max(-1.0, min(1.0, scaled_steer))
+                    # Rate limiter — steering-ul se schimba gradual, nu brusc
+                    desired_steer = max(-1.0, min(1.0, avg_steer * speed_factor))
+                    steer_diff = desired_steer - last_control.steer
+                    if abs(steer_diff) > MAX_STEER_CHANGE:
+                        desired_steer = last_control.steer + MAX_STEER_CHANGE * (1 if steer_diff > 0 else -1)
+                    last_control.steer = desired_steer
+                    
+                    display_speed = current_speed
+                    display_speed_factor = speed_factor
 
+                    # === BRAKE GRADUAL (3 zone) ===
                     brake_history.pop(0)
                     brake_history.append(raw_brake)
                     avg_brake = sum(brake_history) / len(brake_history)
 
-                    if avg_brake > 0.35:
+                    if avg_brake > 0.30:
+                        # Zona 3: frana puternica — oprire de urgenta / obstacol aproape
                         last_control.brake = max(0.4, min(1.0, avg_brake * 2.0))
                         last_control.throttle = 0.0
+                    elif avg_brake > 0.08:
+                        # Zona 2: frana usoara — masina incetineste treptat
+                        # Modelul "vede" ceva in fata si prezice brake mic
+                        last_control.brake = avg_brake
+                        last_control.throttle = 0.1
                     else:
+                        # Zona 1: fara frana — drum liber
                         last_control.brake = 0.0
-                        if current_command in (1, 2):
-                            target_speed = raw_throttle * 25.0
-                        else:
-                            target_speed = raw_throttle * 40.0
+                        # Multiplicator unic — modelul decide cat de repede
+                        # prin valoarea de throttle pe care o prezice
+                        target_speed = raw_throttle * 55.0
                         speed_error = target_speed - current_speed
                         if speed_error > 0:
                             calc_throttle = speed_error * 0.15
                             last_control.throttle = max(0.25, min(0.75, calc_throttle))
+                        elif current_speed < 3.0:
+                            last_control.throttle = 0.15
                         else:
-                            #throttle minim — masina nu se opreste niciodata singura
-                            last_control.throttle = 0.2
+                            last_control.throttle = 0.0
 
                     vehicle.apply_control(last_control)
 
@@ -514,6 +591,7 @@ def main():
 
             text_1 = font.render(f"Driver: AI Hybrid ViT | {MODEL_PATH}", True, (255, 255, 255))
             text_2 = font.render(f"GPS: {cmd_str} | Steer: {last_control.steer:.2f} | T: {last_control.throttle:.2f} | B: {last_control.brake:.2f}", True, (255, 255, 255))
+            text_6 = font.render(f"Speed: {display_speed:.0f} km/h | SteerFactor: {display_speed_factor:.2f}", True, (100, 200, 255))
             text_3 = font.render(f"[V] Camera | [R] Respawn | [M] Attention | [ESC] Exit", True, (150, 150, 150))
 
             if show_attn:
@@ -523,13 +601,25 @@ def main():
                 attn_status = "ATTENTION: OFF | [M] Deschide"
                 color_status = (150, 150, 150)
             text_5 = font.render(attn_status, True, color_status)
+
+            weather_str = WEATHER_NAMES[current_weather_idx]
+            weather_colors = {
+                "ZI_SENINA": (255, 255, 0), "INNORAT": (180, 180, 180),
+                "PLOAIE_USOARA": (100, 150, 255), "PLOAIE_PUTERNICA": (50, 80, 200),
+                "CEATA": (200, 200, 200), "APUS": (255, 150, 50),
+            }
+            w_color = weather_colors.get(weather_str, (255, 255, 255))
+            text_7 = font.render(f"VREME: {weather_str} | [N] Schimba", True, w_color)
+
             text_4 = font.render(f"RADAR GPS (2D) \/", True, (255, 255, 0))
 
             display.blit(text_1, (10, 10))
             display.blit(text_2, (10, 40))
-            display.blit(text_3, (10, 70))
-            display.blit(text_5, (10, 100))
-            display.blit(text_4, (155, 140))
+            display.blit(text_6, (10, 70))
+            display.blit(text_3, (10, 100))
+            display.blit(text_5, (10, 130))
+            display.blit(text_7, (10, 160))
+            display.blit(text_4, (155, 195))
 
             #radar GPS 2D
             if vehicle.is_alive:
@@ -540,7 +630,7 @@ def main():
 
                 route_trace = list(agent.get_local_planner()._waypoints_queue)
 
-                radar_center_x, radar_center_y = 225, 370
+                radar_center_x, radar_center_y = 225, 420
                 pygame.draw.circle(display, (0, 150, 255), (radar_center_x, radar_center_y), 6)
 
                 for wp, _ in route_trace:
@@ -555,7 +645,7 @@ def main():
                         scale = 4
                         screen_x = int(radar_center_x + rel_y * scale)
                         screen_y = int(radar_center_y - rel_x * scale)
-                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 430:
+                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 490:
                             pygame.draw.circle(display, (0, 255, 0), (screen_x, screen_y), 3)
 
             pygame.display.flip()

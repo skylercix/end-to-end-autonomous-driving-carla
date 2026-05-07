@@ -25,7 +25,7 @@ WEIGHT_DECAY = 0.01
 WARMUP_EPOCHS = 5
 VAL_SPLIT = 0.15
 
-# Loss ponderat: steering e de 3x mai important
+#Loss ponderat: steering e de 3x mai important
 LOSS_WEIGHT_STEER = 2.0
 LOSS_WEIGHT_THROTTLE = 1.0
 LOSS_WEIGHT_BRAKE = 1.0
@@ -90,13 +90,13 @@ class CarlaNavDataset(Dataset):
                     except (ValueError, IndexError):
                         continue
 
-        # Pipeline de baza
+        #pipeline de baza
         self.base_pipeline = transforms.Compose([
             transforms.Lambda(convert_yuv),
             transforms.ToTensor(),
         ])
 
-        # Pipeline cu augmentare vizuala + geometrica
+        #pipeline cu augmentare vizuala + geometrica
         self.augment_pipeline = transforms.Compose([
             transforms.ColorJitter(
                 brightness=0.3,
@@ -118,8 +118,8 @@ class CarlaNavDataset(Dataset):
             transforms.ToTensor(),
         ])
 
-        # Pipeline doar geometrica (fara color, pentru RandomErasing care necesita tensor)
-        # Restructuram: ColorJitter + Affine pe PIL, apoi YUV+ToTensor, apoi RandomErasing pe tensor
+        #pipeline doar geometrica (fara color, pentru RandomErasing care necesita tensor)
+        #restructurare: ColorJitter + Affine pe PIL, YUV+ToTensor, RandomErasing pe tensor
         self.augment_color_geo = transforms.Compose([
             transforms.ColorJitter(
                 brightness=0.3,
