@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 import queue
 import pygame
-from pygame.locals import K_ESCAPE, K_v, K_r, K_m, K_n, K_1, K_2, K_3, K_4
+from pygame.locals import K_ESCAPE, K_v, K_r, K_m, K_n, K_t, K_1, K_2, K_3, K_4
 import random
 import sys
 import glob
@@ -30,19 +30,16 @@ from agents.navigation.local_planner import RoadOption
 MODEL_PATH = "model_nav_traffic_vit.pth"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 STEERING_HISTORY_SIZE = 2
-BRAKE_HISTORY_SIZE = 5        # redus de la 8 — reactie mai rapida la frana
+BRAKE_HISTORY_SIZE = 5        # faster reaction for breaking
 
-# === SISTEM INTELIGENT DE STEERING BAZAT PE VITEZA ===
-# Adaptat la vitezele reale din Town01 (15-25 km/h de obicei)
-# Sub SPEED_STEER_FREE: steering 1:1 (viraje stranse la intersectii, manevre)
-# Intre FREE si MAX: reducere liniara (stabilitate pe drum drept)
-# Peste MAX: factor minim
+# === Smart steering system based on speeed ===
+
 SPEED_STEER_FREE = 15.0       # km/h — sub viteza asta, zero dampening  
 SPEED_STEER_MAX = 30.0        # km/h — la viteza asta, dampening maxim
 SPEED_STEER_MIN_FACTOR = 0.55 # factorul minim la viteza mare
 MAX_STEER_CHANGE = 0.05       # cat de mult se poate schimba steering-ul per frame
 
-# === PRESETURI DE VREME ===
+# === WEATHER PRSETS ===
 WEATHER_PRESETS = {
     "ZI_SENINA": carla.WeatherParameters(
         sun_altitude_angle=70.0, cloudiness=10.0, precipitation=0.0,
@@ -78,7 +75,7 @@ WEATHER_PRESETS = {
 WEATHER_NAMES = list(WEATHER_PRESETS.keys())
 
 
-# === HYBRID VIT CU CONV STEM
+# === HYBRID VIT CONV STEM
 
 class ConvStem(nn.Module):
     """
@@ -131,9 +128,9 @@ class TransformerBlock(nn.Module):
 
 class ConditionalViTModel(nn.Module):
     """
-    Hybrid ViT cu Conv Stem + GPS ca Token.
+    Hybrid ViT cu Conv Stem + GPS ca Token + Semafor ca Token.
     Conv Stem: 3 straturi CNN -> 225 patches cu features locale
-    Secventa: [CLS] [GPS] [patch_1] ... [patch_225] = 227 tokens
+    Secventa: [CLS] [GPS] [TL] [patch_1] ... [patch_225] = 228 tokens
     """
     def __init__(self, img_h=66, img_w=200,
                  embed_dim=128, num_heads=4, num_layers=4, mlp_ratio=4, dropout=0.1):
@@ -154,7 +151,13 @@ class ConditionalViTModel(nn.Module):
             nn.Linear(embed_dim, embed_dim)
         )
 
-        self.pos_embed = nn.Parameter(torch.randn(1, self.num_patches + 2, embed_dim) * 0.02)
+        self.tl_embed = nn.Sequential(
+            nn.Linear(3, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, embed_dim)
+        )
+
+        self.pos_embed = nn.Parameter(torch.randn(1, self.num_patches + 3, embed_dim) * 0.02)
         self.pos_drop = nn.Dropout(dropout)
 
         self.blocks = nn.ModuleList([
@@ -170,14 +173,16 @@ class ConditionalViTModel(nn.Module):
             nn.Linear(64, 3)
         )
 
-    def forward(self, img, cmd):
+    def forward(self, img, cmd, tl):
         B = img.shape[0]
         x = self.conv_stem(img)
         x = x.flatten(2).transpose(1, 2)
         cls = self.cls_token.expand(B, -1, -1)
         cmd_onehot = F.one_hot(cmd.long(), num_classes=4).float()
         gps_token = self.gps_embed(cmd_onehot).unsqueeze(1)
-        x = torch.cat([cls, gps_token, x], dim=1)
+        tl_onehot = F.one_hot(tl.long(), num_classes=3).float()
+        tl_token = self.tl_embed(tl_onehot).unsqueeze(1)
+        x = torch.cat([cls, gps_token, tl_token, x], dim=1)
         x = x + self.pos_embed
         x = self.pos_drop(x)
         for block in self.blocks:
@@ -191,7 +196,7 @@ class ConditionalViTModel(nn.Module):
         block = self.blocks[layer_idx]
         if block.attn_weights is None:
             return None
-        cls_attn = block.attn_weights[0, 0, 2:]
+        cls_attn = block.attn_weights[0, 0, 3:]  # skip CLS(0), GPS(1), TL(2)
         attn_map = cls_attn.reshape(self.num_patches_h, self.num_patches_w)
         attn_map = attn_map - attn_map.min()
         if attn_map.max() > 0:
@@ -235,7 +240,7 @@ def spawn_traffic(world, client, num_vehicles=30):
     return spawned_vehicles
 
 def crop_img(img):
-    return img.crop((0, 80, 320, 240))
+    return img.crop((0, 40, 320, 240))
 
 def convert_yuv(img):
     return img.convert("YCbCr")
@@ -259,7 +264,7 @@ def carla_image_to_rgb(image):
     array = np.frombuffer(image.raw_data, dtype=np.uint8)
     array = array.reshape((image.height, image.width, 4))[:, :, :3][:, :, ::-1]
     pil_image = Image.fromarray(array)
-    pil_cropped = pil_image.crop((0, 80, 320, 240))
+    pil_cropped = pil_image.crop((0, 40, 320, 240))
     pil_resized = pil_cropped.resize((200, 66))
     return np.array(pil_resized)
 
@@ -268,7 +273,7 @@ def carla_image_to_rgb(image):
 
 def main():
     pygame.init()
-    display = pygame.display.set_mode((450, 490))
+    display = pygame.display.set_mode((450, 550))
     pygame.display.set_caption("AI Driving Hybrid ViT (Conv Stem + GPS Token)")
     font = pygame.font.SysFont("Arial", 18)
 
@@ -305,7 +310,7 @@ def main():
     spawn_traffic(world, client, num_vehicles=30)
     time.sleep(2.0)
 
-    # Vreme default
+    # default weather
     current_weather_idx = 0
     n_pressed_last_frame = False
     world.set_weather(WEATHER_PRESETS[WEATHER_NAMES[current_weather_idx]])
@@ -367,6 +372,10 @@ def main():
     display_speed = 0.0
     display_speed_factor = 1.0
 
+    # --- SAFETY NET TOGGLE ---
+    safety_net_enabled = True
+    t_pressed_last_frame = False
+
     try:
         while True:
             clock.tick(60)
@@ -379,13 +388,20 @@ def main():
                 follow_mode = not follow_mode
                 time.sleep(0.3)
 
-            # Schimbare vreme cu N
+            # weather change N
             if keys[K_n] and not n_pressed_last_frame:
                 current_weather_idx = (current_weather_idx + 1) % len(WEATHER_NAMES)
                 weather_name = WEATHER_NAMES[current_weather_idx]
                 world.set_weather(WEATHER_PRESETS[weather_name])
                 print(f"[VREME] Schimbat -> {weather_name}")
             n_pressed_last_frame = keys[K_n]
+
+            # Toggle T — safety net tl
+            if keys[K_t] and not t_pressed_last_frame:
+                safety_net_enabled = not safety_net_enabled
+                status = "ACTIV" if safety_net_enabled else "DEZACTIVAT"
+                print(f"[SAFETY NET] {status}")
+            t_pressed_last_frame = keys[K_t]
 
             # Toggle M — attention map
             if keys[K_m] and not m_pressed_last_frame:
@@ -412,7 +428,7 @@ def main():
                     print("[ATTN] Fereastra inchisa.")
             m_pressed_last_frame = keys[K_m]
 
-            #layer change 1-4
+            # change layer 1-4
             for key, layer_num in [(K_1, 1), (K_2, 2), (K_3, 3), (K_4, 4)]:
                 if keys[key] and active_layer != layer_num:
                     active_layer = layer_num
@@ -423,7 +439,7 @@ def main():
                     time.sleep(0.2)
                     break
 
-            # Respawn cu R
+            # Respawn R
             if keys[K_r]:
                 if show_attn and attn_fig is not None:
                     plt.close(attn_fig)
@@ -478,6 +494,46 @@ def main():
             current_road_option = agent.get_local_planner().target_road_option
             current_command = map_command(current_road_option)
 
+            # === READ TL STATE from API ===
+            tl = vehicle.get_traffic_light()
+            if tl is not None:
+                tl_loc = tl.get_location()
+                v_loc = vehicle.get_location()
+                v_fwd = vehicle.get_transform().get_forward_vector()
+                dx = tl_loc.x - v_loc.x
+                dy = tl_loc.y - v_loc.y
+                dot = dx * v_fwd.x + dy * v_fwd.y
+                if dot < 0:
+                    current_tl_state = 0
+                else:
+                    tl_state = tl.get_state()
+                    if tl_state == carla.TrafficLightState.Red: current_tl_state = 1
+                    elif tl_state == carla.TrafficLightState.Yellow: current_tl_state = 2
+                    else: current_tl_state = 0
+            else:
+                v_loc = vehicle.get_location()
+                v_fwd = vehicle.get_transform().get_forward_vector()
+                v_wp = world.get_map().get_waypoint(v_loc)
+                current_tl_state = 0
+                best_dist = 999.0
+                for tl_actor in world.get_actors().filter('traffic.traffic_light*'):
+                    tl_loc = tl_actor.get_location()
+                    dist = v_loc.distance(tl_loc)
+                    if dist > 30.0: continue
+                    dx = tl_loc.x - v_loc.x
+                    dy = tl_loc.y - v_loc.y
+                    dot = dx * v_fwd.x + dy * v_fwd.y
+                    if dot < 0: continue
+                    tl_wp = world.get_map().get_waypoint(tl_loc)
+                    if tl_wp.road_id != v_wp.road_id: continue
+                    if (tl_wp.lane_id * v_wp.lane_id) < 0: continue  # contrasens
+                    if dist < best_dist:
+                        best_dist = dist
+                        state = tl_actor.get_state()
+                        if state == carla.TrafficLightState.Red: current_tl_state = 1
+                        elif state == carla.TrafficLightState.Yellow: current_tl_state = 2
+                        else: current_tl_state = 0
+
             try:
                 last_image = None
                 while not image_queue.empty():
@@ -487,9 +543,10 @@ def main():
                     last_raw_image = last_image
                     img_t = image_to_tensor(last_image)
                     cmd_t = torch.tensor([current_command], dtype=torch.long).to(DEVICE)
+                    tl_t = torch.tensor([current_tl_state], dtype=torch.long).to(DEVICE)
 
                     with torch.no_grad():
-                        predictions = model(img_t, cmd_t)[0]
+                        predictions = model(img_t, cmd_t, tl_t)[0]
                         raw_steer = float(predictions[0])
                         raw_throttle = float(predictions[1])
                         raw_brake = float(predictions[2])
@@ -501,10 +558,7 @@ def main():
                     vel = vehicle.get_velocity()
                     current_speed = 3.6 * math.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
                     
-                    # === STEERING INTELIGENT BAZAT PE VITEZA ===
-                    # Sub SPEED_STEER_FREE: factor = 1.0 (modelul decide complet)
-                    # Intre FREE si MAX: reducere liniara (stabilitate pe drum drept)
-                    # Peste MAX: factor minim
+                    # === SMART STERING BASED ON SPED ===
                     if current_speed < SPEED_STEER_FREE:
                         speed_factor = 1.0
                     elif current_speed > SPEED_STEER_MAX:
@@ -513,7 +567,7 @@ def main():
                         t = (current_speed - SPEED_STEER_FREE) / (SPEED_STEER_MAX - SPEED_STEER_FREE)
                         speed_factor = 1.0 - t * (1.0 - SPEED_STEER_MIN_FACTOR)
                     
-                    # Rate limiter — steering-ul se schimba gradual, nu brusc
+                    # Rate limiter
                     desired_steer = max(-1.0, min(1.0, avg_steer * speed_factor))
                     steer_diff = desired_steer - last_control.steer
                     if abs(steer_diff) > MAX_STEER_CHANGE:
@@ -529,20 +583,24 @@ def main():
                     avg_brake = sum(brake_history) / len(brake_history)
 
                     if avg_brake > 0.30:
-                        # Zona 3: frana puternica — oprire de urgenta / obstacol aproape
                         last_control.brake = max(0.4, min(1.0, avg_brake * 2.0))
                         last_control.throttle = 0.0
                     elif avg_brake > 0.08:
-                        # Zona 2: frana usoara — masina incetineste treptat
-                        # Modelul "vede" ceva in fata si prezice brake mic
                         last_control.brake = avg_brake
                         last_control.throttle = 0.1
-                    else:
-                        # Zona 1: fara frana — drum liber
+                    else:                   
                         last_control.brake = 0.0
-                        # Multiplicator unic — modelul decide cat de repede
-                        # prin valoarea de throttle pe care o prezice
+
                         target_speed = raw_throttle * 55.0
+                        if current_command == 0:      # LANE
+                            max_speed = 30.0
+                        elif current_command == 2:    # RIGHT
+                            max_speed = 13.0
+                        elif current_command == 1:    # LEFT
+                            max_speed = 15.0
+                        else:                         # STRAIGHT
+                            max_speed = 20.0
+                        target_speed = min(target_speed, max_speed)
                         speed_error = target_speed - current_speed
                         if speed_error > 0:
                             calc_throttle = speed_error * 0.15
@@ -552,9 +610,14 @@ def main():
                         else:
                             last_control.throttle = 0.0
 
+                    # === SAFETY NET TL ===
+                    if safety_net_enabled and current_tl_state == 1:  # ROSU
+                        last_control.brake = 0.8
+                        last_control.throttle = 0.0
+
                     vehicle.apply_control(last_control)
 
-                    # --- ACTUALIZARE ATTENTION MAP LIVE ---
+                    # ---LIVE ATTENTION MAP---
                     if show_attn and attn_fig is not None and last_raw_image is not None:
                         try:
                             rgb_frame = carla_image_to_rgb(last_raw_image)
@@ -592,7 +655,17 @@ def main():
             text_1 = font.render(f"Driver: AI Hybrid ViT | {MODEL_PATH}", True, (255, 255, 255))
             text_2 = font.render(f"GPS: {cmd_str} | Steer: {last_control.steer:.2f} | T: {last_control.throttle:.2f} | B: {last_control.brake:.2f}", True, (255, 255, 255))
             text_6 = font.render(f"Speed: {display_speed:.0f} km/h | SteerFactor: {display_speed_factor:.2f}", True, (100, 200, 255))
-            text_3 = font.render(f"[V] Camera | [R] Respawn | [M] Attention | [ESC] Exit", True, (150, 150, 150))
+            
+            tl_labels = ["VERDE/NIMIC", "ROSU", "GALBEN"]
+            tl_colors_display = [(0, 255, 0), (255, 0, 0), (255, 255, 0)]
+            text_tl = font.render(f"SEMAFOR: {tl_labels[current_tl_state]}", True, tl_colors_display[current_tl_state])
+            
+            text_3 = font.render(f"[V] Camera | [R] Respawn | [M] Attention | [T] SafetyNet | [ESC] Exit", True, (150, 150, 150))
+
+            if safety_net_enabled:
+                sn_text = font.render("SAFETY NET: ON", True, (0, 255, 0))
+            else:
+                sn_text = font.render("SAFETY NET: OFF — modelul decide singur", True, (255, 80, 80))
 
             if show_attn:
                 attn_status = f"ATTN: ON | Layer {active_layer}/4 | [1-4] Schimba strat"
@@ -616,10 +689,12 @@ def main():
             display.blit(text_1, (10, 10))
             display.blit(text_2, (10, 40))
             display.blit(text_6, (10, 70))
-            display.blit(text_3, (10, 100))
-            display.blit(text_5, (10, 130))
-            display.blit(text_7, (10, 160))
-            display.blit(text_4, (155, 195))
+            display.blit(text_tl, (10, 100))
+            display.blit(text_3, (10, 130))
+            display.blit(text_5, (10, 160))
+            display.blit(text_7, (10, 190))
+            display.blit(sn_text, (10, 220))
+            display.blit(text_4, (155, 255))
 
             #radar GPS 2D
             if vehicle.is_alive:
@@ -630,7 +705,7 @@ def main():
 
                 route_trace = list(agent.get_local_planner()._waypoints_queue)
 
-                radar_center_x, radar_center_y = 225, 420
+                radar_center_x, radar_center_y = 225, 480
                 pygame.draw.circle(display, (0, 150, 255), (radar_center_x, radar_center_y), 6)
 
                 for wp, _ in route_trace:
@@ -645,7 +720,7 @@ def main():
                         scale = 4
                         screen_x = int(radar_center_x + rel_y * scale)
                         screen_y = int(radar_center_y - rel_x * scale)
-                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 490:
+                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 550:
                             pygame.draw.circle(display, (0, 255, 0), (screen_x, screen_y), 3)
 
             pygame.display.flip()

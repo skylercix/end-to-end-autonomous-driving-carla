@@ -8,3 +8,7 @@ timestamp,model,dataset_size,epochs,best_epoch,learning_rate,best_val_loss,final
 2026-05-05 20:20,ViT Hybrid (Conv Stem + GPS Token),23808,60,47,0.0001,0.03735,0.03604,"Conv Stem 3->48->96->128, 225 tokens, weighted loss s=2.0 t=1.0 b=1.0, aug: ColorJitter+Affine+Erasing"
 2026-05-06 18:22,ViT Hybrid (Conv Stem + GPS Token),27018,60,55,0.0001,0.03546,0.03581,"Conv Stem 3->48->96->128, 225 tokens, weighted loss s=2.0 t=1.0 b=1.0, aug: ColorJitter+Affine+Erasing"
 2026-05-07 13:42,CNN,27018,40,20,0.0003,0.03420,0.02750,"NVIDIA CNN conditionat, MSE loss, Adam, ReduceLROnPlateau"
+2026-05-08 17:14,CNN,10436,40,38,0.0003,0.01478,0.00776,"NVIDIA CNN conditionat, MSE loss, Adam, ReduceLROnPlateau"
+2026-05-11 01:41,ViT Hybrid (Conv Stem + GPS Token),18279,60,55,0.0001,0.01850,0.02003,"Conv Stem 3->48->96->128, 225 tokens, weighted loss s=2.0 t=1.0 b=1.0, aug: ColorJitter+Affine+Erasing"
+2026-05-13 20:57,ViT Hybrid (Conv Stem + GPS Token),19820,80,65,0.0001,0.01951,0.01932,"Conv Stem 3->48->96->128, 225 tokens, weighted loss s=2.0 t=1.0 b=1.0, aug: ColorJitter+Affine+Erasing"
+2026-05-13 22:08,CNN,19820,40,25,0.0003,0.01954,0.00848,"NVIDIA CNN conditionat, MSE loss, Adam, ReduceLROnPlateau"

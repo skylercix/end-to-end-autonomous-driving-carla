@@ -41,6 +41,7 @@ class CarlaNavDataset(Dataset):
         self.images = []
         self.labels = [] 
         self.commands = []
+        self.traffic_lights = []
 
         if not os.path.exists(root):
              raise FileNotFoundError(f"Folderul {root} nu exista!")
@@ -67,7 +68,8 @@ class CarlaNavDataset(Dataset):
                         steer_val = float(row[1])
                         throttle_val = float(row[2]) 
                         brake_val = float(row[3])    
-                        cmd_val = int(row[4]) 
+                        cmd_val = int(row[4])       #GPS status
+                        tl_val = int(row[5])        #TL status
                         
                         full_img_path = os.path.join(episode_path, img_name)
                         
@@ -75,6 +77,7 @@ class CarlaNavDataset(Dataset):
                             self.images.append(full_img_path)
                             self.labels.append([steer_val, throttle_val, brake_val]) 
                             self.commands.append(cmd_val)
+                            self.traffic_lights.append(tl_val)
                     except (ValueError, IndexError):
                         continue 
 
@@ -91,10 +94,11 @@ class CarlaNavDataset(Dataset):
             img = Image.open(self.images[idx]).convert("RGB") 
             img = self.transform_pipeline(img)
             cmd = self.commands[idx]
+            tl = self.traffic_lights[idx]
             targets = self.labels[idx]
-            return img, torch.tensor(cmd, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
+            return img, torch.tensor(cmd, dtype=torch.float32), torch.tensor(tl, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
         except Exception as e:
-            return torch.zeros((3, 66, 200)), torch.tensor(0, dtype=torch.float32), torch.zeros(3, dtype=torch.float32)
+            return torch.zeros((3, 66, 200)), torch.tensor(0, dtype=torch.float32), torch.tensor(0, dtype=torch.float32), torch.zeros(3, dtype=torch.float32)
 
 
 class ConditionalNvidiaModel(nn.Module):
@@ -114,8 +118,12 @@ class ConditionalNvidiaModel(nn.Module):
             nn.Linear(4, 16), nn.ReLU()
         )
 
+        self.tl_fc = nn.Sequential(
+            nn.Linear(3, 16), nn.ReLU()
+        )
+
         self.joint_fc = nn.Sequential(
-            nn.Linear(1152 + 16, 256), nn.ReLU(),
+            nn.Linear(1152 + 16 + 16, 256), nn.ReLU(),
             nn.Dropout(p=0.3), 
             nn.Linear(256, 128), nn.ReLU(),
             nn.Dropout(p=0.2), 
@@ -123,11 +131,13 @@ class ConditionalNvidiaModel(nn.Module):
             nn.Linear(64, 3) 
         )
 
-    def forward(self, img, cmd):
+    def forward(self, img, cmd, tl):
         img_features = self.conv_layers(img)
         cmd_onehot = F.one_hot(cmd.long(), num_classes=4).float()
         cmd_features = self.command_fc(cmd_onehot)
-        combined = torch.cat((img_features, cmd_features), dim=1)
+        tl_onehot = F.one_hot(tl.long(), num_classes=3).float()
+        tl_features = self.tl_fc(tl_onehot)
+        combined = torch.cat((img_features, cmd_features, tl_features), dim=1)
         return self.joint_fc(combined)
 
 def train():
@@ -135,7 +145,7 @@ def train():
     print(f" [V] ANTRENARE PE: {torch.cuda.get_device_name(0) if DEVICE == 'cuda' else 'CPU'}")
     print("="*50 + "\n")
     
-    #nitializare experiment log
+    #experiment log initialization
     if not os.path.exists(EXPERIMENT_LOG):
         header = ["timestamp", "model", "dataset_size", "epochs", "best_epoch",
                   "learning_rate", "best_val_loss", "final_train_loss", "notes"]
@@ -188,10 +198,10 @@ def train():
         model.train() 
         train_loss = 0
         
-        for imgs, cmds, labels in train_loader:
-            imgs, cmds, labels = imgs.to(DEVICE), cmds.to(DEVICE), labels.to(DEVICE)
+        for imgs, cmds, tls, labels in train_loader:
+            imgs, cmds, tls, labels = imgs.to(DEVICE), cmds.to(DEVICE), tls.to(DEVICE), labels.to(DEVICE)
 
-            pred = model(imgs, cmds)
+            pred = model(imgs, cmds, tls)
             loss = loss_fn(pred, labels) 
 
             opt.zero_grad()
@@ -204,9 +214,9 @@ def train():
         model.eval() 
         val_loss = 0
         with torch.no_grad():
-            for imgs, cmds, labels in val_loader:
-                imgs, cmds, labels = imgs.to(DEVICE), cmds.to(DEVICE), labels.to(DEVICE)
-                pred = model(imgs, cmds)
+            for imgs, cmds, tls, labels in val_loader:
+                imgs, cmds, tls, labels = imgs.to(DEVICE), cmds.to(DEVICE), tls.to(DEVICE), labels.to(DEVICE)
+                pred = model(imgs, cmds, tls)
                 loss = loss_fn(pred, labels)
                 val_loss += loss.item()
                 
@@ -214,7 +224,7 @@ def train():
         
         scheduler.step(avg_val_loss)
         
-        #date pt graf
+        #plot dattas
         history_train_loss.append(avg_train_loss)
         history_val_loss.append(avg_val_loss)
 
@@ -244,7 +254,7 @@ def train():
     plt.legend(fontsize=11)
     plt.show()
 
-    #salvare date in csv
+    #save in csv
     best_epoch = history_val_loss.index(min(history_val_loss)) + 1
     row = [
         datetime.now().strftime("%Y-%m-%d %H:%M"),

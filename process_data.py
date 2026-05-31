@@ -11,7 +11,6 @@ INPUT_DIR = "dataset_traffic"
 OUTPUT_DIR = "dataset_traffic_processed"  
 SMOOTHING_WINDOW = 5  
 KEEP_PROBABILITY = 0.20 
-FLIP_PROBABILITY = 0.5 
 
 FINAL_W, FINAL_H = 200, 66
 
@@ -28,7 +27,7 @@ def process_image_structure(img_pil):
     """
     Aplică decuparea cerului (Crop) și redimensionarea la 200x66 (Resize).
     """
-    img_cropped = img_pil.crop((0, 80, 320, 240))
+    img_cropped = img_pil.crop((0, 40, 320, 240))
     img_resized = img_cropped.resize((FINAL_W, FINAL_H))
     return img_resized
 
@@ -39,7 +38,7 @@ def main():
     os.makedirs(OUTPUT_DIR)
 
     print(f"Procesez datele din '{INPUT_DIR}' -> '{OUTPUT_DIR}'...")
-    print("Operații: Smooth + Filtrare + Crop + Resize + Flip")
+    print("Operații: Smooth + Filtrare + Crop + Resize")
     
     total_original = 0
     total_kept = 0
@@ -50,6 +49,7 @@ def main():
     all_new_throttle = []
     all_new_brake = []
     all_new_command = []
+    all_new_tl = []
 
     for episode in os.listdir(INPUT_DIR):
         in_episode_path = os.path.join(INPUT_DIR, episode)
@@ -88,7 +88,8 @@ def main():
             new_steer = smoothed_steerings[i] 
             throttle = float(row[2]) 
             brake = float(row[3])    
-            command = int(row[4]) 
+            command = int(row[4])
+            tl_state = int(row[5])
 
             
             if abs(new_steer) < 0.03 and brake < 0.1:
@@ -106,33 +107,12 @@ def main():
             img_final.save(dst_img_path)
             
             
-            new_rows.append([img_name, new_steer, throttle, brake, command])
+            new_rows.append([img_name, new_steer, throttle, brake, command, tl_state])
             all_new_steer.append(new_steer)
             all_new_throttle.append(throttle)
             all_new_brake.append(brake)
             all_new_command.append(command)
-
-            
-            if random.random() < FLIP_PROBABILITY:
-                flip_img_name = f"flip_{img_name}"
-                dst_flip_path = os.path.join(out_episode_path, flip_img_name)
-                
-                img_flip = img_final.transpose(Image.FLIP_LEFT_RIGHT)
-                img_flip.save(dst_flip_path)
-            
-                flip_steer = -new_steer
-                flip_command = command
-                if command == 1:
-                    flip_command = 2
-                elif command == 2:
-                    flip_command = 1
-                
-                
-                new_rows.append([flip_img_name, flip_steer, throttle, brake, flip_command])
-                all_new_steer.append(flip_steer)
-                all_new_throttle.append(throttle)
-                all_new_brake.append(brake)
-                all_new_command.append(flip_command)
+            all_new_tl.append(tl_state)
 
         with open(os.path.join(out_episode_path, "controls_nav.csv"), 'w', newline='') as f:
             writer = csv.writer(f)
@@ -149,13 +129,13 @@ def main():
         return
         
     print(f"Total cadre inițiale: {total_original}")
-    print(f"Total cadre finale (cu Flip): {total_kept}")
+    print(f"Total cadre finale: {total_kept}")
     
     
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-    fig.suptitle("Analiza Dataset-ului Procesat pentru Trafic", fontsize=16, fontweight='bold')
+    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
+    fig.suptitle("Analiza Dataset-ului Procesat pentru Trafic + Semafoare", fontsize=16, fontweight='bold')
 
-    #grafic suprapunere original vs procesat
+    #plot - original vs processed
     axes[0, 0].hist(all_original_steer, bins=50, color='red', alpha=0.5, label='Original')
     axes[0, 0].hist(all_new_steer, bins=50, color='green', alpha=0.7, label='Procesat (Echilibrat)')
     axes[0, 0].set_title("1. Distribuția Volanului (Steer)")
@@ -163,29 +143,43 @@ def main():
     axes[0, 0].set_ylabel("Număr de Cadre")
     axes[0, 0].legend()
 
-    #grafic acceleratie
+    # throtle plot
     axes[0, 1].hist(all_new_throttle, bins=20, color='blue', edgecolor='black', alpha=0.7)
     axes[0, 1].set_title("2. Accelerație (Throttle)")
     axes[0, 1].set_xlabel("Putere (0.0 Oprit, 1.0 Max)")
     axes[0, 1].set_ylabel("Număr de Cadre")
 
-    #grafic frana
-    axes[1, 0].hist(all_new_brake, bins=20, color='orange', edgecolor='black', alpha=0.7)
-    axes[1, 0].set_title("3. Frânare (Brake)")
-    axes[1, 0].set_xlabel("Putere Frână (0.0 Liber, 1.0 Max)")
-    axes[1, 0].set_ylabel("Număr de Cadre")
+    # brake plot
+    axes[0, 2].hist(all_new_brake, bins=20, color='orange', edgecolor='black', alpha=0.7)
+    axes[0, 2].set_title("3. Frânare (Brake)")
+    axes[0, 2].set_xlabel("Putere Frână (0.0 Liber, 1.0 Max)")
+    axes[0, 2].set_ylabel("Număr de Cadre")
 
-    #grafic comenzi GPS
+    # GPS plot
     cmd_labels = ['LANE (0)', 'LEFT (1)', 'RIGHT (2)', 'STRAIGHT (3)']
     cmd_counts = [all_new_command.count(i) for i in range(4)]
-    bars = axes[1, 1].bar(cmd_labels, cmd_counts, color=['gray', 'purple', 'cyan', 'magenta'], edgecolor='black')
-    axes[1, 1].set_title("4. Comenzi GPS")
-    axes[1, 1].set_ylabel("Număr de Cadre")
+    bars = axes[1, 0].bar(cmd_labels, cmd_counts, color=['gray', 'purple', 'cyan', 'magenta'], edgecolor='black')
+    axes[1, 0].set_title("4. Comenzi GPS")
+    axes[1, 0].set_ylabel("Număr de Cadre")
     
     
     for bar in bars:
         yval = bar.get_height()
-        axes[1, 1].text(bar.get_x() + bar.get_width()/2, yval + (max(cmd_counts)*0.01), int(yval), ha='center', va='bottom', fontweight='bold')
+        axes[1, 0].text(bar.get_x() + bar.get_width()/2, yval + (max(cmd_counts)*0.01), int(yval), ha='center', va='bottom', fontweight='bold')
+
+    # TL plot
+    tl_labels = ['VERDE/NIMIC (0)', 'ROSU (1)', 'GALBEN (2)']
+    tl_counts = [all_new_tl.count(i) for i in range(3)]
+    bars_tl = axes[1, 1].bar(tl_labels, tl_counts, color=['green', 'red', 'gold'], edgecolor='black')
+    axes[1, 1].set_title("5. Stare Semafor")
+    axes[1, 1].set_ylabel("Număr de Cadre")
+    
+    for bar in bars_tl:
+        yval = bar.get_height()
+        if max(tl_counts) > 0:
+            axes[1, 1].text(bar.get_x() + bar.get_width()/2, yval + (max(tl_counts)*0.01), int(yval), ha='center', va='bottom', fontweight='bold')
+
+    axes[1, 2].axis('off')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95]) 
     plt.show()

@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 import queue
 import pygame
-from pygame.locals import K_SPACE, K_ESCAPE, K_m, K_w, K_a, K_s, K_d, K_n
+from pygame.locals import K_SPACE, K_ESCAPE, K_m, K_w, K_a, K_s, K_d, K_n, K_r
 import random
 import sys
 import glob
@@ -24,23 +24,25 @@ from agents.navigation.local_planner import RoadOption
 ROOT_SAVE_FOLDER = "dataset_traffic" 
 os.makedirs(ROOT_SAVE_FOLDER, exist_ok=True)
 
-# === PRESETURI DE VREME ===
+# =====================================================================
+#                        Weather presets
+# =====================================================================
 
 WEATHER_PRESETS = {
     "ZI_SENINA": carla.WeatherParameters(
-        sun_altitude_angle=70.0,       # soare sus
+        sun_altitude_angle=70.0,       
         cloudiness=10.0,               
         precipitation=0.0,             
         precipitation_deposits=0.0,    
         wind_intensity=10.0,
         fog_density=0.0,               
         fog_distance=0.0,
-        wetness=0.0,                   #totul uscat
+        wetness=0.0,                   
         sun_azimuth_angle=0.0
     ),
     "INNORAT": carla.WeatherParameters(
         sun_altitude_angle=50.0,
-        cloudiness=80.0,               #cer innorat
+        cloudiness=80.0,               
         precipitation=0.0,
         precipitation_deposits=0.0,
         wind_intensity=30.0,
@@ -52,19 +54,19 @@ WEATHER_PRESETS = {
     "PLOAIE_USOARA": carla.WeatherParameters(
         sun_altitude_angle=40.0,
         cloudiness=70.0,
-        precipitation=30.0,            #ploaie usoara
-        precipitation_deposits=30.0,   #asfalt partial ud
+        precipitation=30.0,            
+        precipitation_deposits=30.0,   
         wind_intensity=40.0,
         fog_density=5.0,
         fog_distance=0.0,
-        wetness=40.0,                  #suprafete ude
+        wetness=40.0,                  
         sun_azimuth_angle=180.0
     ),
     "PLOAIE_PUTERNICA": carla.WeatherParameters(
         sun_altitude_angle=30.0,
         cloudiness=90.0,
-        precipitation=70.0,            #ploaie puternica
-        precipitation_deposits=70.0,   #asfalt ud, multe balti
+        precipitation=70.0,            
+        precipitation_deposits=70.0,  
         wind_intensity=70.0,
         fog_density=10.0,
         fog_distance=0.0,
@@ -77,13 +79,13 @@ WEATHER_PRESETS = {
         precipitation=0.0,
         precipitation_deposits=0.0,
         wind_intensity=5.0,
-        fog_density=40.0,              #ceata
-        fog_distance=30.0,             #vizibilitate redusa
+        fog_density=40.0,              
+        fog_distance=30.0,             
         wetness=20.0,
         sun_azimuth_angle=45.0
     ),
     "APUS": carla.WeatherParameters(
-        sun_altitude_angle=10.0,       #lumina orizont
+        sun_altitude_angle=10.0,       
         cloudiness=20.0,
         precipitation=0.0,
         precipitation_deposits=0.0,
@@ -91,7 +93,7 @@ WEATHER_PRESETS = {
         fog_density=5.0,
         fog_distance=0.0,
         wetness=0.0,
-        sun_azimuth_angle=220.0        #lumina din lateral
+        sun_azimuth_angle=220.0        
     ),
 }
 
@@ -126,14 +128,14 @@ def get_next_episode_path(root_folder):
         except: continue
     return os.path.join(root_folder, f"episode_{max_idx + 1:03d}")
 
-def save_image(image, control, command, episode_path, buffer_controls):
+def save_image(image, control, command, tl_state, episode_path, buffer_controls):
     image.convert(carla.ColorConverter.Raw)
     array = np.frombuffer(image.raw_data, dtype=np.uint8)
     array = array.reshape((image.height, image.width, 4))[:, :, :3][:, :, ::-1] 
     pil_image = Image.fromarray(array)
     filename = f"{image.frame}.png"
     pil_image.save(os.path.join(episode_path, filename))
-    buffer_controls.append([filename, control.steer, control.throttle, control.brake, command])
+    buffer_controls.append([filename, control.steer, control.throttle, control.brake, command, tl_state])
 
 def save_csv(episode_path, buffer_controls):
     if not buffer_controls:
@@ -143,7 +145,7 @@ def save_csv(episode_path, buffer_controls):
     csv_path = os.path.join(episode_path, "controls_nav.csv")
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["filename", "steer", "throttle", "brake", "command"])
+        writer.writerow(["filename", "steer", "throttle", "brake", "command", "traffic_light"])
         writer.writerows(buffer_controls)
     print(f" Salvat: {os.path.basename(episode_path)} | {len(buffer_controls)} imagini.")
 
@@ -159,7 +161,7 @@ def spawn_traffic(world, client, num_vehicles=25):
     spawned_vehicles = []
     random.shuffle(spawn_points)
     
-    print(f"Incercam sa spawnam {num_vehicles} masini de trafic...")
+    print(f"Spawn {num_vehicles} masini de trafic...")
     for i in range(min(num_vehicles, len(spawn_points))):
         bp = random.choice(blueprint_library.filter('vehicle.*'))
         
@@ -180,8 +182,8 @@ def spawn_traffic(world, client, num_vehicles=25):
 
 def main():
     pygame.init()
-    display = pygame.display.set_mode((450, 430))
-    pygame.display.set_caption("Colectare cu Trafic + Vreme | SPACE=Rec | N=Vreme")
+    display = pygame.display.set_mode((450, 460))
+    pygame.display.set_caption("Colectare cu Trafic + Vreme + Semafor | SPACE=Rec | R=Respawn")
     font = pygame.font.SysFont("Arial", 18)
 
     print("Se conecteaza la simulator...")
@@ -215,8 +217,9 @@ def main():
     time.sleep(1.0)
 
     agent = BasicAgent(vehicle, target_speed=20)
-    agent.ignore_traffic_lights(active=True)
     agent.ignore_stop_signs(active=True)
+    agent._base_tlight_threshold = 2.75    # stop closer to tl
+    agent._base_vehicle_threshold = 3.0   # stop closer to cars
     
     current_wp = world.get_map().get_waypoint(vehicle.get_location())
     next_wps = current_wp.next(100.0)
@@ -254,19 +257,59 @@ def main():
             
             if keys[K_ESCAPE]: break
 
-            #autopilot/manual cu M
+            #autopilot/manual M
             if keys[K_m] and not m_pressed_last_frame:
                 autopilot_enabled = not autopilot_enabled
                 print(f"\n>>> MOD CONDUS: {'AUTOPILOT' if autopilot_enabled else 'MANUAL (WASD)'} <<<")
             m_pressed_last_frame = keys[K_m]
 
-            #change weather cu N
+            #change weather N
             if keys[K_n] and not n_pressed_last_frame:
                 current_weather_idx = (current_weather_idx + 1) % len(WEATHER_NAMES)
                 weather_name = WEATHER_NAMES[current_weather_idx]
                 world.set_weather(WEATHER_PRESETS[weather_name])
                 print(f"\n[VREME] Schimbat -> {weather_name}")
             n_pressed_last_frame = keys[K_n]
+
+            # Respawn R
+            if keys[K_r]:
+                
+                if is_recording and buffer_controls:
+                    save_csv(current_episode_path, buffer_controls)
+                    is_recording = False
+
+                if camera.is_listening:
+                    camera.stop()
+                cleanup_actors(world)
+                time.sleep(1.0)
+
+                spawn_traffic(world, client, num_vehicles=25)
+                time.sleep(2.0)
+
+                vehicle = None
+                while vehicle is None:
+                    spawn_point = random.choice(spawn_points)
+                    vehicle = world.try_spawn_actor(vehicle_bp, spawn_point)
+                time.sleep(1.0)
+
+                agent = BasicAgent(vehicle, target_speed=20)
+                agent.ignore_stop_signs(active=True)
+                agent._base_tlight_threshold = 2.0
+                agent._base_vehicle_threshold = 3.0
+                current_wp = world.get_map().get_waypoint(vehicle.get_location())
+                next_wps = current_wp.next(100.0)
+                if next_wps:
+                    agent.set_destination(next_wps[0].transform.location)
+                else:
+                    agent.set_destination(random.choice(spawn_points).location)
+
+                camera = world.spawn_actor(camera_bp, cam_transform, attach_to=vehicle)
+                while not image_queue.empty():
+                    image_queue.get_nowait()
+                camera.listen(image_queue.put)
+                manual_steer = 0.0
+                print(f"[CARLA] Vehicul respawnat.")
+                continue
 
             if agent.done():
                 current_loc = vehicle.get_location()
@@ -278,6 +321,16 @@ def main():
             auto_control = agent.run_step()
             current_road_option = agent.get_local_planner().target_road_option
             current_command = map_command(current_road_option)
+
+            # adaptive speed
+            if current_command == 0:      # LANE
+                 agent.set_target_speed(30)
+            elif current_command == 2:    # RIGHT
+                agent.set_target_speed(13)
+            elif current_command == 1:    # LEFT
+                agent.set_target_speed(15)
+            else:                         # STRAIGHT
+                agent.set_target_speed(20)
 
             if autopilot_enabled:
                 control_to_apply = auto_control
@@ -298,6 +351,52 @@ def main():
 
             vehicle.apply_control(control_to_apply)
 
+# =====================================================================
+#                        Traffic Lights
+# =====================================================================
+            # Method 1: API
+            tl = vehicle.get_traffic_light()
+            if tl is not None:
+                tl_loc = tl.get_location()
+                v_loc = vehicle.get_location()
+                v_fwd = vehicle.get_transform().get_forward_vector()
+                dx = tl_loc.x - v_loc.x
+                dy = tl_loc.y - v_loc.y
+                dot = dx * v_fwd.x + dy * v_fwd.y
+                
+                if dot < 0:
+                    current_tl_state = 0
+                else:
+                    tl_state = tl.get_state()
+                    if tl_state == carla.TrafficLightState.Red: current_tl_state = 1
+                    elif tl_state == carla.TrafficLightState.Yellow: current_tl_state = 2
+                    else: current_tl_state = 0
+            else:
+                # Method 2: search for TL
+                v_loc = vehicle.get_location()
+                v_fwd = vehicle.get_transform().get_forward_vector()
+                v_wp = world.get_map().get_waypoint(v_loc)
+                current_tl_state = 0
+                best_dist = 999.0
+                
+                for tl_actor in world.get_actors().filter('traffic.traffic_light*'):
+                    tl_loc = tl_actor.get_location()
+                    dist = v_loc.distance(tl_loc)
+                    if dist > 30.0: continue
+                    dx = tl_loc.x - v_loc.x
+                    dy = tl_loc.y - v_loc.y
+                    dot = dx * v_fwd.x + dy * v_fwd.y
+                    if dot < 0: continue
+                    tl_wp = world.get_map().get_waypoint(tl_loc)
+                    if tl_wp.road_id != v_wp.road_id: continue
+                    if (tl_wp.lane_id * v_wp.lane_id) < 0: continue  # contrasens
+                    if dist < best_dist:
+                        best_dist = dist
+                        state = tl_actor.get_state()
+                        if state == carla.TrafficLightState.Red: current_tl_state = 1
+                        elif state == carla.TrafficLightState.Yellow: current_tl_state = 2
+                        else: current_tl_state = 0
+
             if keys[K_SPACE] and not is_recording:
                 is_recording = True
                 current_episode_path = get_next_episode_path(ROOT_SAVE_FOLDER)
@@ -308,7 +407,10 @@ def main():
                 is_recording = False
                 save_csv(current_episode_path, buffer_controls)
 
-            # === DISPLAY PYGAME ===
+# =====================================================================
+#                        DISPLAY PYGAME
+# =====================================================================
+
             bg_color = (200, 0, 0) if is_recording else (0, 0, 0)
             display.fill(bg_color)
             
@@ -318,9 +420,14 @@ def main():
             
             text_1 = font.render(f"Driver: {driver_str} | REC: {'DA' if is_recording else 'NU'}", True, (255,255,255))
             text_2 = font.render(f"GPS: {cmd_str} | S: {control_to_apply.steer:.2f} | T: {control_to_apply.throttle:.2f} | B: {control_to_apply.brake:.2f}", True, (255,255,255))
-            text_3 = font.render(f"[M] Manual | [SPACE] Record | [N] Vreme", True, (150,150,150))
             
-            #culori
+            tl_labels = ["VERDE/NIMIC", "ROSU", "GALBEN"]
+            tl_colors_display = [(0, 255, 0), (255, 0, 0), (255, 255, 0)]
+            text_tl = font.render(f"SEMAFOR: {tl_labels[current_tl_state]}", True, tl_colors_display[current_tl_state])
+            
+            text_3 = font.render(f"[M] Manual | [SPACE] Rec | [R] Respawn | [N] Vreme", True, (150,150,150))
+            
+            #colors
             weather_colors = {
                 "ZI_SENINA": (255, 255, 0),
                 "INNORAT": (180, 180, 180),
@@ -336,9 +443,10 @@ def main():
             
             display.blit(text_1, (10, 10))
             display.blit(text_2, (10, 40))
-            display.blit(text_3, (10, 70))
-            display.blit(text_4, (10, 100))
-            display.blit(text_5, (155, 140))
+            display.blit(text_tl, (10, 70))
+            display.blit(text_3, (10, 100))
+            display.blit(text_4, (10, 130))
+            display.blit(text_5, (155, 165))
 
             if vehicle.is_alive:
                 v_transform = vehicle.get_transform()
@@ -347,7 +455,7 @@ def main():
                 v_yaw = math.radians(v_transform.rotation.yaw)
                 
                 route_trace = list(agent.get_local_planner()._waypoints_queue)
-                radar_center_x, radar_center_y = 225, 370
+                radar_center_x, radar_center_y = 225, 390
                 pygame.draw.circle(display, (0, 150, 255), (radar_center_x, radar_center_y), 6)
 
                 for wp, _ in route_trace:
@@ -364,7 +472,7 @@ def main():
                         scale = 4  
                         screen_x = int(radar_center_x + rel_y * scale)
                         screen_y = int(radar_center_y - rel_x * scale) 
-                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 430:
+                        if 0 <= screen_x <= 450 and 0 <= screen_y <= 460:
                             pygame.draw.circle(display, (0, 255, 0), (screen_x, screen_y), 3)
 
             pygame.display.flip()
@@ -381,7 +489,7 @@ def main():
                 while not image_queue.empty(): last_image = image_queue.get_nowait()
                 
                 if is_recording and last_image is not None:
-                    save_image(last_image, control_to_apply, current_command, current_episode_path, buffer_controls)
+                    save_image(last_image, control_to_apply, current_command, current_tl_state, current_episode_path, buffer_controls)
             except queue.Empty: pass
 
     finally:

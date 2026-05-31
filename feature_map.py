@@ -31,8 +31,12 @@ class ConditionalNvidiaModel(nn.Module):
             nn.Linear(4, 16), nn.ReLU()
         )
 
+        self.tl_fc = nn.Sequential(
+            nn.Linear(3, 16), nn.ReLU()
+        )
+
         self.joint_fc = nn.Sequential(
-            nn.Linear(1152 + 16, 256), nn.ReLU(),
+            nn.Linear(1152 + 16 + 16, 256), nn.ReLU(),
             nn.Dropout(p=0.3), 
             nn.Linear(256, 128), nn.ReLU(),
             nn.Dropout(p=0.2), 
@@ -40,11 +44,13 @@ class ConditionalNvidiaModel(nn.Module):
             nn.Linear(64, 3) 
         )
 
-    def forward(self, img, cmd):
+    def forward(self, img, cmd, tl):
         img_features = self.conv_layers(img)
         cmd_onehot = F.one_hot(cmd.long(), num_classes=4).float()
         cmd_features = self.command_fc(cmd_onehot)
-        combined = torch.cat((img_features, cmd_features), dim=1)
+        tl_onehot = F.one_hot(tl.long(), num_classes=3).float()
+        tl_features = self.tl_fc(tl_onehot)
+        combined = torch.cat((img_features, cmd_features, tl_features), dim=1)
         return self.joint_fc(combined)
 
 
@@ -97,12 +103,13 @@ def main():
     
   
     cmd_tensor = torch.tensor([3], dtype=torch.long).to(DEVICE)
+    tl_tensor = torch.tensor([0], dtype=torch.long).to(DEVICE)
 
    
     layer_to_visualize = model.conv_layers[0] 
     layer_to_visualize.register_forward_hook(get_activation('conv1'))
 
-    _ = model(input_tensor, cmd_tensor)
+    _ = model(input_tensor, cmd_tensor, tl_tensor)
 
  
     act = activation['conv1'].squeeze()
