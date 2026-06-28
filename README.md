@@ -2,8 +2,11 @@
 
 End-to-end deep learning system that drives a car autonomously in the CARLA simulator using only a front-facing RGB camera and a high-level GPS navigation command. Built as my Bachelor's thesis project.
 
-<!-- TODO: replace with a 10-15 second GIF of the car driving autonomously in CARLA -->
-![Autonomous driving demo](docs/demo.gif)
+[![Autonomous driving demo](https://img.youtube.com/vi/VcucVdwaAFg/maxresdefault.jpg)](https://youtu.be/VcucVdwaAFg)
+
+
+
+
 
 ---
 
@@ -23,25 +26,28 @@ The system learns to drive by imitating recorded demonstrations. A single convol
 
 ## Architecture
 
-<!-- TODO: optional simple diagram of the pipeline -->
 
 ```
 RGB Camera (200x66, YUV)  ─►  Conv layers (5x NVIDIA-style)  ─┐
                                                               ├─►  FC layers  ─►  [steer, throttle, brake]
-GPS command (LANE/L/R/STR) ─►  FC 1→16                        ─┘
+GPS command (LANE/L/R/STR) ─►  FC 1→16                       ─┘
 ```
 
 The image branch produces a 1152-dim feature vector; the command branch produces 16 dims; these are concatenated and passed through fully connected layers (`1168 → 256 → 128 → 64 → 3`).
 
 ## Results
 
-<!-- TODO: replace with the actual training_history.png -->
-![Training history](docs/training_history.png)
+I trained and compared two architectures for the same task: a CNN (NVIDIA PilotNet-style) and a Vision Transformer (ViT).
 
-<!-- TODO: optional — first conv layer feature maps -->
-![Feature maps of first convolutional layer](docs/feature_maps.png)
+**CNN training history:**
 
-The model successfully drives in Town01 with traffic, correctly executing navigation commands at intersections and stopping for vehicles ahead.
+![CNN training history](<img width="1228" height="741" alt="Screenshot 2026-05-13 220513" src="https://github.com/user-attachments/assets/a49e7ec5-e470-4965-aaa9-22e4c1244693" />
+)
+
+**Vision Transformer training history:**
+
+![ViT training history](<img width="2100" height="750" alt="training_history_vit" src="https://github.com/user-attachments/assets/8d39e88b-9511-49f9-a86e-94b0307f56e2" />
+)
 
 ## Tech Stack
 
