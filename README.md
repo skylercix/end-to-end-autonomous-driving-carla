@@ -65,9 +65,9 @@ Architecture: 4 transformer blocks, 4 attention heads, 128-dim embeddings, AdamW
 
 **NVIDIA Conditional CNN (baseline)**
 ```
-RGB image (200×66, YUV) ─►  5 conv layers (NVIDIA PilotNet)  ─►  1152 features  ─┐
+RGB image (200×66, YUV) ─►  5 conv layers (NVIDIA PilotNet)  ─►  1152 features   ─┐
 GPS command (one-hot, 4 classes)  ─►  Linear(4 → 16)                              ├─►  MLP  ─►  [steer, throttle, brake]
-TL state (one-hot, 3 classes)     ─►  Linear(3 → 16)                              ─┘
+TL state (one-hot, 3 classes)     ─►  Linear(3 → 16)                             ─┘
 ```
 Fusion happens *after* feature extraction. The CNN never sees the command while extracting features.
 
@@ -163,7 +163,6 @@ python benchmark.py --model vit
 
 This project is my Bachelor's thesis at the *Universitatea Transilvania din Brașov*, IESC department (2026), supervised by Asist. univ. dr. ing. Cosmin Ginerică. The goal was to build a complete autonomous driving system end-to-end — from data collection, through dataset engineering and model design, to a benchmark harness and closed-loop deployment — and to propose and validate an architectural change that is not just a reimplementation of existing work.
 
-If you'd like to read the full thesis (in Romanian, with English abstract), [it's available here](docs/thesis.pdf). <!-- Replace with the actual link once hosted -->
 
 ## References
 
