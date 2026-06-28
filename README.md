@@ -5,7 +5,7 @@ End-to-end conditional imitation learning for self-driving in the CARLA simulato
 In a fixed 6-route benchmark across distinct weather conditions in Town01 with dense traffic, the Hybrid ViT completed **5 out of 6 routes (1 collision, 3,202 m driven)** while the CNN baseline completed only **1 out of 6 (3 collisions, 1,617 m driven)** — despite both models reaching a nearly identical validation loss of ~0.0195.
 
 <!-- Replace with a 10–15 s clip of the ViT driving autonomously in Town01 -->
-[![Autonomous driving demo](https://img.youtube.com/vi/VcucVdwaAFg/maxresdefault.jpg)](https://youtu.be/VcucVdwaAFg)
+![Autonomous driving demo](docs/demo.gif)
 
 ---
 
@@ -32,6 +32,16 @@ Both models were trained on the same dataset (~19,800 images), evaluated on six 
 
 The CNN tends to fail in two characteristic ways: hesitating at intersections under unfamiliar lighting, and oscillating laterally at higher speeds. The ViT generalizes more cleanly to the held-out weather conditions and reacts more decisively at intersections, which is consistent with the attention maps showing it locking onto distant lane geometry and traffic-light positions early in the sequence.
 
+### Training curves
+
+Both models converge cleanly, with training and validation loss tracking closely — the strongest indicator that the dataset is well-balanced and not over-augmented.
+
+<p align="center">
+  <img src="docs/training_history_cnn.png" width="48%" alt="CNN training history" />
+  <img src="docs/training_history_vit.png" width="48%" alt="ViT training history" />
+</p>
+<p align="center"><em>Left: NVIDIA Conditional CNN. Right: Hybrid ViT.</em></p>
+
 ## Original contribution — GPS and Traffic Light as Self-Attention Tokens
 
 In classical Conditional Imitation Learning (Codevilla et al., 2018) and most CARLA baselines, the navigation command is fused with the visual features *after* the CNN has already produced a global representation. The visual encoder has no way to know, while it's looking at the image, that the agent is supposed to turn left at the next intersection.
@@ -55,9 +65,9 @@ Architecture: 4 transformer blocks, 4 attention heads, 128-dim embeddings, AdamW
 
 **NVIDIA Conditional CNN (baseline)**
 ```
-RGB image (200×66, YUV) ─►  5 conv layers (NVIDIA PilotNet)  ─►  1152 features   ─┐
+RGB image (200×66, YUV) ─►  5 conv layers (NVIDIA PilotNet)  ─►  1152 features  ─┐
 GPS command (one-hot, 4 classes)  ─►  Linear(4 → 16)                              ├─►  MLP  ─►  [steer, throttle, brake]
-TL state (one-hot, 3 classes)     ─►  Linear(3 → 16)                             ─┘
+TL state (one-hot, 3 classes)     ─►  Linear(3 → 16)                              ─┘
 ```
 Fusion happens *after* feature extraction. The CNN never sees the command while extracting features.
 
@@ -70,6 +80,16 @@ TL state (one-hot, 3 classes)    ─►  Linear → ReLU → Linear        ─�
 [CLS] + [GPS] + [TL] + 225 patches  ─►  4× Transformer blocks  ─►  CLS head  ─►  [steer, throttle, brake]
 ```
 Condition tokens participate in attention from layer 1.
+
+### Visualizations — what each model "looks at"
+
+The most informative way to compare the two architectures is to look at where each one focuses while driving. The CNN heatmaps show the regions of the input that activate the convolutional layers most strongly; the ViT attention maps show how the network distributes attention across the 225 visual patches.
+
+<p align="center">
+  <img src="docs/cnn_heatmap.png" width="48%" alt="CNN conv-layer heatmap" />
+  <img src="docs/vit_attentionmap.png" width="48%" alt="ViT self-attention map" />
+</p>
+<p align="center"><em>Left: CNN convolutional activations. Right: ViT self-attention map. The ViT consistently distributes attention along lane geometry and traffic-light positions, while the CNN activations are more diffuse.</em></p>
 
 ## System highlights
 
