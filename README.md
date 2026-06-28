@@ -38,9 +38,9 @@ Both models converge cleanly, with training and validation loss tracking closely
 
 <p align="center">
   <img src="docs/training_history_cnn.png" width="48%" alt="CNN training history" />
-  <img src="docs/training_history_vit.png" width="48%" alt="ViT training history" />
+  <img src="docs/training_history_vit.png" width="65%" alt="ViT training history" />
 </p>
-<p align="center"><em>Left: NVIDIA Conditional CNN. Right: Hybrid ViT.</em></p>
+<p align="center"><em>Up: NVIDIA Conditional CNN. Down: Hybrid ViT.</em></p>
 
 ## Original contribution — GPS and Traffic Light as Self-Attention Tokens
 
