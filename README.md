@@ -5,7 +5,7 @@ End-to-end conditional imitation learning for self-driving in the CARLA simulato
 In a fixed 6-route benchmark across distinct weather conditions in Town01 with dense traffic, the Hybrid ViT completed **5 out of 6 routes (1 collision, 3,202 m driven)** while the CNN baseline completed only **1 out of 6 (3 collisions, 1,617 m driven)** — despite both models reaching a nearly identical validation loss of ~0.0195.
 
 <!-- Replace with a 10–15 s clip of the ViT driving autonomously in Town01 -->
-![Autonomous driving demo](docs/demo.gif)
+[![Autonomous driving demo](https://img.youtube.com/vi/VcucVdwaAFg/maxresdefault.jpg)](https://youtu.be/VcucVdwaAFg)
 
 ---
 
