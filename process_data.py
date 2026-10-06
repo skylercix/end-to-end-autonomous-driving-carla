@@ -16,7 +16,7 @@ FINAL_W, FINAL_H = 200, 66
 
 def smooth_steering(steering_list):
     """
-    Transformă input-ul de tastatură într-o curbă mai lină folosind o medie mobilă.
+    Transforma input-ul de tastatura într-o curba mai lină folosind o medie mobila.
     """
     arr = np.array(steering_list)
     kernel = np.ones(SMOOTHING_WINDOW) / SMOOTHING_WINDOW
@@ -25,7 +25,7 @@ def smooth_steering(steering_list):
 
 def process_image_structure(img_pil):
     """
-    Aplică decuparea cerului (Crop) și redimensionarea la 200x66 (Resize).
+    Aplica decuparea cerului (Crop) și redimensionarea la 200x66 (Resize).
     """
     img_cropped = img_pil.crop((0, 40, 320, 240))
     img_resized = img_cropped.resize((FINAL_W, FINAL_H))
@@ -33,12 +33,12 @@ def process_image_structure(img_pil):
 
 def main():
     if os.path.exists(OUTPUT_DIR):
-        print(f"Șterg vechiul {OUTPUT_DIR}...")
+        print(f"sterg vechiul {OUTPUT_DIR}...")
         shutil.rmtree(OUTPUT_DIR)
     os.makedirs(OUTPUT_DIR)
 
     print(f"Procesez datele din '{INPUT_DIR}' -> '{OUTPUT_DIR}'...")
-    print("Operații: Smooth + Filtrare + Crop + Resize")
+    print("Operatii: Smooth + Filtrare + Crop + Resize")
     
     total_original = 0
     total_kept = 0
@@ -128,7 +128,7 @@ def main():
         print("Nu au fost gasite date valide.")
         return
         
-    print(f"Total cadre inițiale: {total_original}")
+    print(f"Total cadre initiale: {total_original}")
     print(f"Total cadre finale: {total_kept}")
     
     
@@ -138,8 +138,8 @@ def main():
     #plot - original vs processed
     axes[0, 0].hist(all_original_steer, bins=50, color='red', alpha=0.5, label='Original')
     axes[0, 0].hist(all_new_steer, bins=50, color='green', alpha=0.7, label='Procesat (Echilibrat)')
-    axes[0, 0].set_title("1. Distribuția Volanului (Steer)")
-    axes[0, 0].set_xlabel("Unghi Volan (-1.0 Stânga, 1.0 Dreapta)")
+    axes[0, 0].set_title("1. Distributia Volanului (Steer)")
+    axes[0, 0].set_xlabel("Unghi Volan (-1.0 Stanga, 1.0 Dreapta)")
     axes[0, 0].set_ylabel("Număr de Cadre")
     axes[0, 0].legend()
 
@@ -147,20 +147,20 @@ def main():
     axes[0, 1].hist(all_new_throttle, bins=20, color='blue', edgecolor='black', alpha=0.7)
     axes[0, 1].set_title("2. Accelerație (Throttle)")
     axes[0, 1].set_xlabel("Putere (0.0 Oprit, 1.0 Max)")
-    axes[0, 1].set_ylabel("Număr de Cadre")
+    axes[0, 1].set_ylabel("Numar de Cadre")
 
     # brake plot
     axes[0, 2].hist(all_new_brake, bins=20, color='orange', edgecolor='black', alpha=0.7)
-    axes[0, 2].set_title("3. Frânare (Brake)")
-    axes[0, 2].set_xlabel("Putere Frână (0.0 Liber, 1.0 Max)")
-    axes[0, 2].set_ylabel("Număr de Cadre")
+    axes[0, 2].set_title("3. Franare (Brake)")
+    axes[0, 2].set_xlabel("Putere Frana (0.0 Liber, 1.0 Max)")
+    axes[0, 2].set_ylabel("Numar de Cadre")
 
     # GPS plot
     cmd_labels = ['LANE (0)', 'LEFT (1)', 'RIGHT (2)', 'STRAIGHT (3)']
     cmd_counts = [all_new_command.count(i) for i in range(4)]
     bars = axes[1, 0].bar(cmd_labels, cmd_counts, color=['gray', 'purple', 'cyan', 'magenta'], edgecolor='black')
     axes[1, 0].set_title("4. Comenzi GPS")
-    axes[1, 0].set_ylabel("Număr de Cadre")
+    axes[1, 0].set_ylabel("Numar de Cadre")
     
     
     for bar in bars:
@@ -172,7 +172,7 @@ def main():
     tl_counts = [all_new_tl.count(i) for i in range(3)]
     bars_tl = axes[1, 1].bar(tl_labels, tl_counts, color=['green', 'red', 'gold'], edgecolor='black')
     axes[1, 1].set_title("5. Stare Semafor")
-    axes[1, 1].set_ylabel("Număr de Cadre")
+    axes[1, 1].set_ylabel("Numar de Cadre")
     
     for bar in bars_tl:
         yval = bar.get_height()

@@ -13,9 +13,10 @@ import torch.nn.functional as F
 
 
 # === CONFIGURATION ===
+
 DATASET_DIR = "dataset_traffic_processed"
-MODEL_SAVE_PATH = "model_nav_traffic_vit.pth"
-GRAPH_SAVE_PATH = "training_history_vit.png"
+MODEL_SAVE_PATH = "model_nav_traffic_vit_accel.pth"
+GRAPH_SAVE_PATH = "training_history_vit_accel.png"
 EXPERIMENT_LOG = "experiment_log.csv"
 
 BATCH_SIZE = 64
@@ -25,10 +26,9 @@ WEIGHT_DECAY = 0.01
 WARMUP_EPOCHS = 5
 VAL_SPLIT = 0.15
 
-#weighted loss
+# weighted loss (2 iesiri: steer, accel)
 LOSS_WEIGHT_STEER = 2.0
-LOSS_WEIGHT_THROTTLE = 1.0
-LOSS_WEIGHT_BRAKE = 1.0
+LOSS_WEIGHT_ACCEL = 1.0
 
 NUM_WORKERS = 0
 PREFETCH_FACTOR = None
@@ -83,23 +83,27 @@ class CarlaNavDataset(Dataset):
                         cmd_val = int(row[4])
                         tl_val = int(row[5])
 
+                        # === CONVERSIE ACCEL ===
+                        
+                        accel_val = throttle_val - brake_val
+
                         full_img_path = os.path.join(episode_path, img_name)
 
                         if os.path.exists(full_img_path):
                             self.images.append(full_img_path)
-                            self.labels.append([steer_val, throttle_val, brake_val])
+                            self.labels.append([steer_val, accel_val])
                             self.commands.append(cmd_val)
                             self.traffic_lights.append(tl_val)
                     except (ValueError, IndexError):
                         continue
 
-        #pipeline
+        # pipeline
         self.base_pipeline = transforms.Compose([
             transforms.Lambda(convert_yuv),
             transforms.ToTensor(),
         ])
 
-        #pipeline with visual augmentation + geometrical
+        # pipeline with visual augmentation + geometrical
         self.augment_pipeline = transforms.Compose([
             transforms.ColorJitter(
                 brightness=0.3,
@@ -152,7 +156,7 @@ class CarlaNavDataset(Dataset):
         try:
             img = Image.open(self.images[idx]).convert("RGB")
 
-            # Augmentare cu 50% probabilitate (doar la antrenare)
+            
             if self.augment and random.random() < 0.5:
                 img = self.augment_color_geo(img)
                 img = self.augment_post(img)
@@ -164,7 +168,7 @@ class CarlaNavDataset(Dataset):
             targets = self.labels[idx]
             return img, torch.tensor(cmd, dtype=torch.float32), torch.tensor(tl, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
         except Exception:
-            return torch.zeros((3, 66, 200)), torch.tensor(0, dtype=torch.float32), torch.tensor(0, dtype=torch.float32), torch.zeros(3, dtype=torch.float32)
+            return torch.zeros((3, 66, 200)), torch.tensor(0, dtype=torch.float32), torch.tensor(0, dtype=torch.float32), torch.zeros(2, dtype=torch.float32)
 
 
 # === CONV STEM HYBRID VISION TRANSFORMER ===
@@ -174,7 +178,7 @@ class ConvStem(nn.Module):
     Mini-CNN care inlocuieste patch embedding-ul brut.
     3 straturi conv cu BatchNorm -> extrag features locale (margini, texturi, linii)
     INAINTE ca transformerul sa le proceseze.
-    
+
     Flux: 3x66x200 -> 48x33x100 -> 96x17x50 -> 128x9x25
     Rezultat: 9x25 = 225 tokens de 128 dimensiuni
     """
@@ -182,15 +186,15 @@ class ConvStem(nn.Module):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 48, kernel_size=3, stride=2, padding=1)
         self.bn1 = nn.BatchNorm2d(48)
-        
+
         self.conv2 = nn.Conv2d(48, 96, kernel_size=3, stride=2, padding=1)
         self.bn2 = nn.BatchNorm2d(96)
-        
+
         self.conv3 = nn.Conv2d(96, embed_dim, kernel_size=3, stride=2, padding=1)
         self.bn3 = nn.BatchNorm2d(embed_dim)
-        
+
         self.act = nn.ReLU()
-    
+
     def forward(self, x):
         x = self.act(self.bn1(self.conv1(x)))   # -> (B, 48, 33, 100)
         x = self.act(self.bn2(self.conv2(x)))    # -> (B, 96, 17, 50)
@@ -225,10 +229,11 @@ class TransformerBlock(nn.Module):
 class ConditionalViTModel(nn.Module):
     """
     Hybrid Vision Transformer cu Conv Stem + GPS ca Token + Semafor ca Token.
-    
+    VARIANTA ACCEL: capul produce 2 iesiri (steer, accel) in loc de 3.
+
     Conv Stem: 3 straturi CNN extrag features locale (margini, texturi)
     Rezultat: 9x25 = 225 patch-uri, fiecare deja cu informatii locale
-    
+
     Secventa: [CLS] [GPS] [TL] [patch_1] ... [patch_225] = 228 tokens
     GPS si TL participa la self-attention in TOATE straturile.
     """
@@ -238,49 +243,48 @@ class ConditionalViTModel(nn.Module):
 
         self.embed_dim = embed_dim
 
-        
         self.conv_stem = ConvStem(embed_dim)
-        
-        #numarul de patch-uri dupa conv stem
+
+        # numarul de patch-uri dupa conv stem
         # 66x200 -> stride 2 de 3 ori -> 9x25 = 225 patches
         self.num_patches_h = math.ceil(img_h / 8)   # 66/8 = 9 (cu padding)
         self.num_patches_w = math.ceil(img_w / 8)    # 200/8 = 25
         self.num_patches = self.num_patches_h * self.num_patches_w  # 225
 
-        #CLS token
+        # CLS token
         self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02)
 
-        #GPS token embedding (4 clase: LANE, LEFT, RIGHT, STRAIGHT)
+        # GPS token embedding (4 clase: LANE, LEFT, RIGHT, STRAIGHT)
         self.gps_embed = nn.Sequential(
             nn.Linear(4, embed_dim),
             nn.ReLU(),
             nn.Linear(embed_dim, embed_dim)
         )
 
-        #Traffic Light token embedding (3 clase: VERDE/NIMIC, ROSU, GALBEN)
+        # Traffic Light token embedding (3 clase: VERDE/NIMIC, ROSU, GALBEN)
         self.tl_embed = nn.Sequential(
             nn.Linear(3, embed_dim),
             nn.ReLU(),
             nn.Linear(embed_dim, embed_dim)
         )
 
-        #Positional embeddings: 1 CLS + 1 GPS + 1 TL + 225 patches = 228
+        # Positional embeddings: 1 CLS + 1 GPS + 1 TL + 225 patches = 228
         self.pos_embed = nn.Parameter(torch.randn(1, self.num_patches + 3, embed_dim) * 0.02)
         self.pos_drop = nn.Dropout(dropout)
 
-        #Transformer encoder
+        # Transformer encoder
         self.blocks = nn.ModuleList([
             TransformerBlock(embed_dim, num_heads, mlp_ratio, dropout)
             for _ in range(num_layers)
         ])
         self.norm = nn.LayerNorm(embed_dim)
 
-        #MLP head
+        # MLP head -> 2 iesiri: steer, accel
         self.head = nn.Sequential(
             nn.Linear(embed_dim, 128), nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, 64), nn.ReLU(),
-            nn.Linear(64, 3)  
+            nn.Linear(64, 2)
         )
 
         self._init_weights()
@@ -305,33 +309,33 @@ class ConditionalViTModel(nn.Module):
     def forward(self, img, cmd, tl):
         B = img.shape[0]
 
-        #Conv Stem: extrage features locale
+        # Conv Stem: extrage features locale
         # (B, 3, 66, 200) -> (B, 128, 9, 25)
         x = self.conv_stem(img)
-        
-        #Flatten spatial -> secventa de tokens
+
+        # Flatten spatial -> secventa de tokens
         # (B, 128, 9, 25) -> (B, 225, 128)
         x = x.flatten(2).transpose(1, 2)
 
-        #CLS token
+        # CLS token
         cls = self.cls_token.expand(B, -1, -1)
 
-        #GPS token
+        # GPS token
         cmd_onehot = F.one_hot(cmd.long(), num_classes=4).float()
         gps_token = self.gps_embed(cmd_onehot).unsqueeze(1)
 
-        #Traffic Light token
+        # Traffic Light token
         tl_onehot = F.one_hot(tl.long(), num_classes=3).float()
         tl_token = self.tl_embed(tl_onehot).unsqueeze(1)
 
-        #secventa: [CLS] [GPS] [TL] [patch_1] ... [patch_225]
+        # secventa: [CLS] [GPS] [TL] [patch_1] ... [patch_225]
         x = torch.cat([cls, gps_token, tl_token, x], dim=1)
 
-        #positional embeddings
+        # positional embeddings
         x = x + self.pos_embed
         x = self.pos_drop(x)
 
-        #transformer blocks
+        # transformer blocks
         for block in self.blocks:
             x = block(x)
 
@@ -386,34 +390,35 @@ class CosineWarmupScheduler:
         return lr
 
 
-# === WEIGHTED MSE LOSS ===
+# === WEIGHTED MSE LOSS (2 iesiri) ===
 class WeightedMSELoss(nn.Module):
     """
     MSE loss cu ponderi diferite per output.
     Steering primeste greutate mai mare fiindca e critic pentru a sta pe banda.
+    Longitudinal (accel) e o singura dimensiune cu semn.
     """
-    def __init__(self, weight_steer=3.0, weight_throttle=1.0, weight_brake=1.0):
+    def __init__(self, weight_steer=2.0, weight_accel=1.0):
         super().__init__()
-        self.weights = torch.tensor([weight_steer, weight_throttle, weight_brake])
-    
+        self.weights = torch.tensor([weight_steer, weight_accel])
+
     def forward(self, pred, target):
         weights = self.weights.to(pred.device)
-        mse_per_output = (pred - target) ** 2  # (B, 3)
-        weighted_mse = mse_per_output * weights  # (B, 3) broadcast
+        mse_per_output = (pred - target) ** 2  # (B, 2)
+        weighted_mse = mse_per_output * weights  # (B, 2) broadcast
         return weighted_mse.mean()
 
 
-#fisier pt statistici finale
+# fisier pt statistici finale
 def init_experiment_log(log_path):
     """
     Creeaza fisierul CSV daca nu exista si adauga datele.
     """
     if os.path.exists(log_path):
         return
-    
+
     header = ["timestamp", "model", "dataset_size", "epochs", "best_epoch",
               "learning_rate", "best_val_loss", "final_train_loss", "notes"]
-    
+
     historical_data = [
         ["2025-01-01 00:00", "CNN", "9485", "40", "~35",
          "3e-4", "0.03700", "-", "Prima antrenare CNN, dataset initial"],
@@ -422,12 +427,12 @@ def init_experiment_log(log_path):
         ["2025-02-01 00:00", "ViT (GPS-as-Token)", "13000", "60", "60",
          "1e-4", "0.05100", "-", "ViT v2 - GPS ca token in secventa transformer"],
     ]
-    
+
     with open(log_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
         writer.writerows(historical_data)
-    
+
     print(f"[LOG] Fisier {log_path} creat cu {len(historical_data)} antrenari istorice.")
 
 
@@ -447,11 +452,11 @@ def log_experiment(log_path, model_name, dataset_size, epochs, best_epoch,
         f"{final_train_loss:.5f}",
         notes
     ]
-    
+
     with open(log_path, "a", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(row)
-    
+
     print(f"[LOG] Experiment salvat in {log_path}")
 
 
@@ -461,14 +466,13 @@ def count_parameters(model):
 
 def train():
     print("\n" + "=" * 60)
-    print(f"  ANTRENARE Hybrid ViT (Conv Stem + GPS-as-Token)")
+    print(f"  ANTRENARE Hybrid ViT ACCEL (2 iesiri: steer, accel)")
     print(f"  Device: {torch.cuda.get_device_name(0) if DEVICE == 'cuda' else 'CPU'}")
     print("=" * 60 + "\n")
 
-    
     init_experiment_log(EXPERIMENT_LOG)
 
-    #augmentare doar pt antrenare
+    # augmentare doar pt antrenare
     dataset_aug = CarlaNavDataset(DATASET_DIR, augment=True)
     dataset_clean = CarlaNavDataset(DATASET_DIR, augment=False)
     total_data = len(dataset_clean)
@@ -500,17 +504,19 @@ def train():
     print(f" -> Conv Stem: 3 -> 48 -> 96 -> 128 (3 straturi conv cu BN)")
     print(f" -> Tokens: 1 CLS + 1 GPS + 1 TL + {model.num_patches} patches = {model.num_patches + 3}")
     print(f" -> Embed dim: {model.embed_dim}, Layers: {len(model.blocks)}, Heads: {model.blocks[0].attn.num_heads}")
+    print(f" -> Iesiri: 2 (steer, accel cu semn)")
     print(f" -> Parametri totali: {num_params:,}")
     print(f"\n --- ANTRENARE ---")
-    print(f" -> Loss ponderat: steer={LOSS_WEIGHT_STEER}x, throttle={LOSS_WEIGHT_THROTTLE}x, brake={LOSS_WEIGHT_BRAKE}x")
+    print(f" -> Loss ponderat: steer={LOSS_WEIGHT_STEER}x, accel={LOSS_WEIGHT_ACCEL}x")
     print(f" -> LR: {LEARNING_RATE}, Warmup: {WARMUP_EPOCHS} epoci, Weight Decay: {WEIGHT_DECAY}")
     print(f" -> Augmentare: ColorJitter + RandomAffine(±3°, ±5%) + RandomErasing(20%)\n")
 
-    loss_fn = WeightedMSELoss(LOSS_WEIGHT_STEER, LOSS_WEIGHT_THROTTLE, LOSS_WEIGHT_BRAKE)
+    loss_fn = WeightedMSELoss(LOSS_WEIGHT_STEER, LOSS_WEIGHT_ACCEL)
     opt = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = CosineWarmupScheduler(opt, WARMUP_EPOCHS, NUM_EPOCHS)
 
     best_val_loss = float('inf')
+    best_epoch = 0
     history_train_loss = []
     history_val_loss = []
     history_lr = []
@@ -562,10 +568,10 @@ def train():
 
     print(f"\nAntrenare completa! Eroare minima de validare: {best_val_loss:.5f} (epoca {best_epoch})")
 
-    #save in csv
+    # save in csv
     log_experiment(
         EXPERIMENT_LOG,
-        model_name="ViT Hybrid (Conv Stem + GPS Token)",
+        model_name="ViT Hybrid ACCEL (Conv Stem + GPS Token)",
         dataset_size=total_data,
         epochs=NUM_EPOCHS,
         best_epoch=best_epoch,
@@ -573,13 +579,14 @@ def train():
         best_val_loss=best_val_loss,
         final_train_loss=history_train_loss[-1],
         notes=f"Conv Stem 3->48->96->128, {model.num_patches} tokens, "
-              f"weighted loss s={LOSS_WEIGHT_STEER} t={LOSS_WEIGHT_THROTTLE} b={LOSS_WEIGHT_BRAKE}, "
+              f"2 iesiri (steer, accel cu semn), "
+              f"weighted loss s={LOSS_WEIGHT_STEER} accel={LOSS_WEIGHT_ACCEL}, "
               f"aug: ColorJitter+Affine+Erasing"
     )
 
-    #plots
+    # plots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-    fig.suptitle("Antrenare Hybrid ViT (Conv Stem + GPS-as-Token)", fontsize=14, fontweight='bold')
+    fig.suptitle("Antrenare Hybrid ViT ACCEL (Conv Stem + GPS-as-Token)", fontsize=14, fontweight='bold')
 
     ax1.plot(range(1, NUM_EPOCHS + 1), history_train_loss, label='Train Loss', color='blue', linewidth=2)
     ax1.plot(range(1, NUM_EPOCHS + 1), history_val_loss, label='Val Loss', color='orange', linewidth=2, linestyle='--')
