@@ -163,7 +163,7 @@ python benchmark.py --model vit
 
 This project is my Bachelor's thesis at the *Universitatea Transilvania din Brașov*, IESC department (2026), supervised by Asist. univ. dr. ing. Cosmin Ginerică. The goal was to build a complete autonomous driving system end-to-end — from data collection, through dataset engineering and model design, to a benchmark harness and closed-loop deployment — and to propose and validate an architectural change that is not just a reimplementation of existing work.
 
-If you'd like to read the full thesis (in Romanian, with English abstract), [it's available here](docs/thesis.pdf). <!-- Replace with the actual link once hosted -->
+
 
 ## References
 
