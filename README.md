@@ -66,16 +66,16 @@ Architecture: 4 transformer blocks, 4 attention heads, 128-dim embeddings, AdamW
 **NVIDIA Conditional CNN (baseline)**
 ```
 RGB image (200×66, YUV) ─►  5 conv layers (NVIDIA PilotNet)  ─►  1152 features  ─┐
-GPS command (one-hot, 4 classes)  ─►  Linear(4 → 16)                              ├─►  MLP  ─►  [steer, throttle, brake]
-TL state (one-hot, 3 classes)     ─►  Linear(3 → 16)                              ─┘
+GPS command (one-hot, 4 classes)  ─►  Linear(4 → 16)                             ├─►  MLP  ─►  [steer, throttle, brake]
+TL state (one-hot, 3 classes)     ─►  Linear(3 → 16)                            ─┘
 ```
 Fusion happens *after* feature extraction. The CNN never sees the command while extracting features.
 
 **Hybrid ViT (this work)**
 ```
 RGB image (200×66, YUV) ─►  Conv Stem (3 layers, 3→48→96→128 ch)  ─►  225 patch tokens (128-dim)
-GPS command (one-hot, 4 classes) ─►  Linear → ReLU → Linear        ─►  1 GPS token
-TL state (one-hot, 3 classes)    ─►  Linear → ReLU → Linear        ─►  1 TL token
+GPS command (one-hot, 4 classes) ─►  Linear → ReLU → Linear       ─►  1 GPS token
+TL state (one-hot, 3 classes)    ─►  Linear → ReLU → Linear       ─►  1 TL token
                                                                        │
 [CLS] + [GPS] + [TL] + 225 patches  ─►  4× Transformer blocks  ─►  CLS head  ─►  [steer, throttle, brake]
 ```
