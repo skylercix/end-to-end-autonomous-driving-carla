@@ -22,7 +22,7 @@ The answer to the second question turned out to be the most informative part of 
 
 Both models were trained on the same dataset (~19,800 images), evaluated on six fixed routes in CARLA Town01 with 30 NPC vehicles, and run under six distinct weather presets (clear day, overcast, light rain, heavy rain, fog, sunset). The throttle multiplier was unified across both models for a fair comparison.
 
-| Metric | NVIDIA Conditional CNN | **Hybrid ViT (ours)** |
+| Metric | NVIDIA Conditional CNN | **Hybrid ViT** |
 |---|---|---|
 | Routes completed | 1 / 6 | **5 / 6** |
 | Total collisions | 3 | **1** |
